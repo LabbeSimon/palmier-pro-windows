@@ -6,6 +6,7 @@ import {
   type MediaAsset,
   type Timeline,
 } from '../../core/model.js'
+import { EDIT_MODES, type EditMode } from '../../core/ops.js'
 import { framesToTimecode } from '../../core/timecode.js'
 import {
   IconEye,
@@ -45,6 +46,8 @@ interface Props {
   onRenameTrack: (trackId: string, name: string) => void
   onAddTrack: (type: 'video' | 'audio') => void
   onZoom: (pixelsPerFrame: number) => void
+  editMode: EditMode
+  onSetEditMode: (mode: EditMode) => void
   onSetTool: (tool: TimelineTool) => void
   onToggleSnap: () => void
   onSetWorkZone: (inFrame: number | null, outFrame: number | null) => void
@@ -238,6 +241,22 @@ export function TimelineView(props: Props) {
         >
           Snap
         </button>
+
+        <span className="divider" />
+
+        {/* Kdenlive names these the timeline edit modes. */}
+        <select
+          className="edit-mode"
+          value={props.editMode}
+          onChange={(event) => props.onSetEditMode(event.target.value as EditMode)}
+          title="What a drop does when the target range is occupied"
+        >
+          {EDIT_MODES.map((mode) => (
+            <option key={mode} value={mode}>
+              {mode[0]!.toUpperCase() + mode.slice(1)}
+            </option>
+          ))}
+        </select>
 
         <span className="divider" />
 
@@ -480,7 +499,7 @@ export function TimelineView(props: Props) {
                   return (
                     <div
                       key={clip.id}
-                      className={`clip ${clip.mediaType}${selected ? ' selected' : ''}${dragClipId === clip.id ? ' dragging' : ''}${poster ? ' has-poster' : ''}`}
+                      className={`clip ${clip.mediaType}${selected ? ' selected' : ''}${dragClipId === clip.id ? ' dragging' : ''}${poster ? ' has-poster' : ''}${clip.groupId ? ' grouped' : ''}`}
                       style={{ left, width, ...poster }}
                       title={`${name}\n${framesToTimecode(clip.startFrame, timeline.fps)} → ${framesToTimecode(clipEndFrame(clip), timeline.fps)}${effectCount ? `\n${effectCount} effect(s)` : ''}`}
                       draggable={tool === 'select' && !track.locked}

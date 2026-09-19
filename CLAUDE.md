@@ -95,11 +95,13 @@ Le point qui distingue ce logiciel de Kdenlive.
 - [ ] L'agent voit la timeline et agit dessus en direct
 - [ ] Journal des actions de l'agent, annulables une par une
 
-### Bloc 5 — Fonctions Kdenlive manquantes  ⬜
+### Bloc 5 — Fonctions Kdenlive manquantes  🟡
 
-- [ ] Groupes de clips
-- [ ] Zone de travail (in/out) et rendu partiel
-- [ ] Modes d'édition : écrasement, insertion
+- [x] **Groupes de clips** — `Ctrl+G` / `Ctrl+Shift+G`, liseré ambre sur les
+      clips groupés ; un groupe fusionne au lieu de s'imbriquer
+- [x] **Zone de travail** (in/out) et rendu limité à la zone
+- [x] **Modes d'édition** : normal, écrasement, insertion, dans la barre
+      timeline et en MCP. L'écrasement découpe proprement le clip dessous
 - [ ] Trim avancé : ripple, roll, slip, slide
 - [ ] Proxy clips pour le montage sur machine modeste
 - [ ] Étalonnage : courbes, roues chromatiques

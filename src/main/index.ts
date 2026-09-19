@@ -234,6 +234,8 @@ handle('ops:setProjectSettings', (args) => store.apply((p) => ops.setProjectSett
 handle('ops:removeAssets', (args) => store.apply((p) => ops.removeAssets(p, args.assetIds)))
 handle('ops:shiftClips', (args) => store.apply((p) => ops.shiftClips(p, args)))
 handle('ops:setWorkZone', (args) => store.apply((p) => ops.setWorkZone(p, args)))
+handle('ops:groupClips', (args) => store.apply((p) => ops.groupClips(p, args)))
+handle('ops:ungroupClips', (args) => store.apply((p) => ops.ungroupClips(p, args)))
 handle('ops:addEffect', (args) => store.apply((p) => ops.addEffect(p, args)))
 handle('ops:removeEffect', (args) => store.apply((p) => ops.removeEffect(p, args)))
 handle('ops:setEffectParams', (args) => store.apply((p) => ops.setEffectParams(p, args)))

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { timelineTotalFrames, type Clip } from '../core/model.js'
-import type { ClipProperties } from '../core/ops.js'
+import type { ClipProperties, EditMode } from '../core/ops.js'
 import type { MenuCommand } from '../main/menu.js'
 import { AudioMixer } from './components/AudioMixer.js'
 import { DropZone } from './components/DropZone.js'
@@ -43,6 +43,7 @@ export function App() {
   const [pixelsPerFrame, setPixelsPerFrame] = useState(2)
   const [exporting, setExporting] = useState(false)
   const [tool, setTool] = useState<TimelineTool>('select')
+  const [editMode, setEditMode] = useState<EditMode>('normal')
   const [snapEnabled, setSnapEnabled] = useState(true)
   const [leftTab, setLeftTab] = useState<LeftTab>('media')
   const [rightTab, setRightTab] = useState<RightTab>('inspector')
@@ -169,6 +170,12 @@ export function App() {
         case 'edit:deselect': setSelectedClipIds([]); break
         case 'edit:delete': deleteSelection(false); break
         case 'edit:rippleDelete': deleteSelection(true); break
+        case 'edit:group':
+          void run(() => window.palmier.ops.groupClips({ timelineId, clipIds: selectedClipIds }))
+          break
+        case 'edit:ungroup':
+          void run(() => window.palmier.ops.ungroupClips({ timelineId, clipIds: selectedClipIds }))
+          break
         case 'media:import': void run(() => window.palmier.media.import()); break
         case 'timeline:split': splitAtPlayhead(); break
         case 'timeline:addText': addTextAtPlayhead(); break
@@ -201,7 +208,7 @@ export function App() {
     return off
   }, [
     run, exportVideo, selectAll, deleteSelection, splitAtPlayhead, addTextAtPlayhead,
-    addMarkerAtPlayhead, timelineId, totalFrames, state.mcp, setStatus,
+    addMarkerAtPlayhead, timelineId, totalFrames, state.mcp, setStatus, selectedClipIds, player,
   ])
 
   // --- Keyboard: only what the menu does not already own. ------------------
@@ -446,8 +453,16 @@ export function App() {
         onMoveClip={(clipId, startFrame, trackId) =>
           void run(() => window.palmier.ops.moveClips({ timelineId, moves: [{ clipId, startFrame, trackId }] }))
         }
+        editMode={editMode}
+        onSetEditMode={setEditMode}
         onDropAsset={(assetId, trackId, startFrame) =>
-          void run(() => window.palmier.ops.addClips({ timelineId, clips: [{ assetId, trackId, startFrame }] }))
+          void run(() =>
+            window.palmier.ops.addClips({
+              timelineId,
+              clips: [{ assetId, trackId, startFrame }],
+              mode: editMode,
+            }),
+          )
         }
         onDropEffect={(definitionId, clipId) => addEffect(definitionId, [clipId])}
         onRazor={(_trackId, frame) => void run(() => window.palmier.ops.splitClips({ timelineId, frame }))}

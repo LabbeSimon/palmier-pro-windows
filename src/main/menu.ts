@@ -20,6 +20,8 @@ export type MenuCommand =
   | 'edit:deselect'
   | 'edit:delete'
   | 'edit:rippleDelete'
+  | 'edit:group'
+  | 'edit:ungroup'
   | 'media:import'
   | 'timeline:split'
   | 'timeline:addText'
@@ -71,6 +73,9 @@ export function buildMenu(window: BrowserWindow): Menu {
         { type: 'separator' },
         { label: 'Delete', accelerator: 'Delete', click: send('edit:delete') },
         { label: 'Ripple delete', accelerator: 'Shift+Delete', click: send('edit:rippleDelete') },
+        { type: 'separator' },
+        { label: 'Group clips', accelerator: 'CmdOrCtrl+G', click: send('edit:group') },
+        { label: 'Ungroup clips', accelerator: 'CmdOrCtrl+Shift+G', click: send('edit:ungroup') },
       ],
     },
     {

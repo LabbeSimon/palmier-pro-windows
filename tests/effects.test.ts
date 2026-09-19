@@ -337,3 +337,110 @@ describe('work zone', () => {
     expect(ops.setWorkZone(set, { inFrame: 5, outFrame: 50 }).receipt.changed).toBe(false)
   })
 })
+
+describe('clip groups', () => {
+  function threeOnTwoTracks() {
+    const media: MediaAsset = {
+      id: crypto.randomUUID(), path: 'C:/m/a.mp4', name: 'a.mp4', type: 'video',
+      durationSeconds: 30, width: 1920, height: 1080, fps: 30,
+      hasAudio: false, sampleRate: 0, channels: 0, thumbnailPath: null,
+    }
+    let state = ops.addAssets(ops.emptyProject('T'), [media]).project
+    state = ops.addTrack(state, { type: 'video', name: 'V2' }).project
+    const [v1, , v2] = state.timelines[0]!.tracks
+    state = ops.addClips(state, { clips: [{ assetId: media.id, trackId: v1!.id, startFrame: 0, durationFrames: 60 }] }).project
+    state = ops.addClips(state, { clips: [{ assetId: media.id, trackId: v2!.id, startFrame: 0, durationFrames: 60 }] }).project
+    const ids = state.timelines[0]!.tracks.flatMap((t) => t.clips.map((c) => c.id))
+    return { project: state, ids, assetId: media.id }
+  }
+
+  it('moves grouped clips together', () => {
+    const { project, ids } = threeOnTwoTracks()
+    const grouped = ops.groupClips(project, { clipIds: ids }).project
+    const moved = ops.moveClips(grouped, { moves: [{ clipId: ids[0]!, startFrame: 120 }] }).project
+    const starts = moved.timelines[0]!.tracks.flatMap((t) => t.clips.map((c) => c.startFrame))
+    expect(starts).toEqual([120, 120])
+  })
+
+  it('deletes grouped clips together', () => {
+    const { project, ids } = threeOnTwoTracks()
+    const grouped = ops.groupClips(project, { clipIds: ids }).project
+    const removed = ops.removeClips(grouped, { clipIds: [ids[0]!] }).project
+    expect(removed.timelines[0]!.tracks.flatMap((t) => t.clips)).toHaveLength(0)
+  })
+
+  it('refuses a group of fewer than two clips', () => {
+    const { project, ids } = threeOnTwoTracks()
+    expect(() => ops.groupClips(project, { clipIds: [ids[0]!] })).toThrow(/at least two/)
+  })
+
+  it('ungroups and reports a no-op when nothing was grouped', () => {
+    const { project, ids } = threeOnTwoTracks()
+    const grouped = ops.groupClips(project, { clipIds: ids }).project
+    const freed = ops.ungroupClips(grouped, { clipIds: [ids[0]!] })
+    expect(freed.receipt.changed).toBe(true)
+    expect(freed.project.timelines[0]!.tracks.flatMap((t) => t.clips).every((c) => c.groupId === null)).toBe(true)
+    expect(ops.ungroupClips(freed.project, { clipIds: ids }).receipt.changed).toBe(false)
+  })
+})
+
+describe('edit modes', () => {
+  function oneLongClip() {
+    const media: MediaAsset = {
+      id: crypto.randomUUID(), path: 'C:/m/a.mp4', name: 'a.mp4', type: 'video',
+      durationSeconds: 30, width: 1920, height: 1080, fps: 30,
+      hasAudio: false, sampleRate: 0, channels: 0, thumbnailPath: null,
+    }
+    let state = ops.addAssets(ops.emptyProject('T'), [media]).project
+    state = ops.addClips(state, { clips: [{ assetId: media.id, startFrame: 0, durationFrames: 120 }] }).project
+    return { project: state, assetId: media.id, trackId: state.timelines[0]!.tracks[0]!.id }
+  }
+
+  it('refuses in normal mode and says which mode would work', () => {
+    const { project, assetId, trackId } = oneLongClip()
+    expect(() =>
+      ops.addClips(project, { clips: [{ assetId, trackId, startFrame: 30, durationFrames: 30 }] }),
+    ).toThrow(/overwrite.*insert/)
+  })
+
+  it('overwrite splits the clip underneath and leaves an exact hole', () => {
+    const { project, assetId, trackId } = oneLongClip()
+    const { project: next, receipt } = ops.addClips(project, {
+      clips: [{ assetId, trackId, startFrame: 40, durationFrames: 30 }],
+      mode: 'overwrite',
+    })
+    const clips = next.timelines[0]!.tracks[0]!.clips
+    expect(clips.map((c) => [c.startFrame, c.durationFrames])).toEqual([
+      [0, 40],
+      [40, 30],
+      [70, 50],
+    ])
+    expect(receipt.warnings.join(' ')).toMatch(/overwrote/)
+  })
+
+  it('overwrite trims a clip it only partly covers', () => {
+    const { project, assetId, trackId } = oneLongClip()
+    const next = ops.addClips(project, {
+      clips: [{ assetId, trackId, startFrame: 100, durationFrames: 60 }],
+      mode: 'overwrite',
+    }).project
+    const clips = next.timelines[0]!.tracks[0]!.clips
+    expect(clips.map((c) => [c.startFrame, c.durationFrames])).toEqual([
+      [0, 100],
+      [100, 60],
+    ])
+  })
+
+  it('insert pushes everything at or after the point rightwards', () => {
+    const { project, assetId, trackId } = oneLongClip()
+    const next = ops.addClips(project, {
+      clips: [{ assetId, trackId, startFrame: 0, durationFrames: 45 }],
+      mode: 'insert',
+    }).project
+    const clips = next.timelines[0]!.tracks[0]!.clips
+    expect(clips.map((c) => [c.startFrame, c.durationFrames])).toEqual([
+      [0, 45],
+      [45, 120],
+    ])
+  })
+})

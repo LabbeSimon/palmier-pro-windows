@@ -164,32 +164,87 @@ function sortClips(track: Track): void {
   track.clips.sort((a, b) => a.startFrame - b.startFrame)
 }
 
-/** Adds every clip sharing a link group with the given ids. */
-function expandLinked(timeline: Timeline, clipIds: string[]): Set<string> {
-  const ids = new Set(clipIds)
-  const groups = new Set<string>()
-  for (const track of timeline.tracks) {
-    for (const clip of track.clips) {
-      if (ids.has(clip.id) && clip.linkGroupId) groups.add(clip.linkGroupId)
+/**
+ * Frees a frame range on a track for an overwrite: clips fully inside it are
+ * removed, clips straddling an edge are trimmed, and a clip spanning the whole
+ * range is split in two so the hole is exact.
+ */
+function clearRange(track: Track, startFrame: number, endFrame: number): string[] {
+  const touched: string[] = []
+  const survivors: Clip[] = []
+
+  for (const clip of track.clips) {
+    const clipEnd = clipEndFrame(clip)
+    if (clipEnd <= startFrame || clip.startFrame >= endFrame) {
+      survivors.push(clip)
+      continue
+    }
+    touched.push(clip.id)
+
+    const keepsHead = clip.startFrame < startFrame
+    const keepsTail = clipEnd > endFrame
+
+    if (keepsHead) {
+      const head = structuredClone(clip)
+      const cut = startFrame - clip.startFrame
+      head.trimEndFrame += Math.round((head.durationFrames - cut) * head.speed)
+      head.durationFrames = cut
+      head.fadeOutFrames = Math.min(head.fadeOutFrames, cut)
+      survivors.push(head)
+    }
+    if (keepsTail) {
+      const tail = structuredClone(clip)
+      const skipped = endFrame - clip.startFrame
+      tail.trimStartFrame += Math.round(skipped * tail.speed)
+      tail.startFrame = endFrame
+      tail.durationFrames = clipEnd - endFrame
+      tail.fadeInFrames = Math.min(tail.fadeInFrames, tail.durationFrames)
+      // A split half is a new clip, so it gets its own identity.
+      if (keepsHead) tail.id = newId()
+      survivors.push(tail)
     }
   }
-  if (groups.size === 0) return ids
-  for (const track of timeline.tracks) {
-    for (const clip of track.clips) {
-      if (clip.linkGroupId && groups.has(clip.linkGroupId)) ids.add(clip.id)
+
+  track.clips = survivors
+  sortClips(track)
+  return touched
+}
+
+/**
+ * Adds every clip bound to the given ones — by the automatic A/V link, or by a
+ * user-made group. Both mean "these move and die together", so both expand.
+ */
+function expandLinked(timeline: Timeline, clipIds: string[]): Set<string> {
+  const ids = new Set(clipIds)
+  const keys = new Set<string>()
+  const keyOf = (clip: Clip) => [clip.linkGroupId, clip.groupId].filter(Boolean) as string[]
+
+  // Repeat until stable: a group can bridge two separate link pairs.
+  let grew = true
+  while (grew) {
+    grew = false
+    for (const track of timeline.tracks) {
+      for (const clip of track.clips) {
+        if (ids.has(clip.id)) {
+          for (const key of keyOf(clip)) if (!keys.has(key)) { keys.add(key); grew = true }
+        }
+      }
+    }
+    for (const track of timeline.tracks) {
+      for (const clip of track.clips) {
+        if (ids.has(clip.id)) continue
+        if (keyOf(clip).some((key) => keys.has(key))) { ids.add(clip.id); grew = true }
+      }
     }
   }
   return ids
 }
 
-/** Clips linked to `clipId`, excluding itself. */
+/** Clips bound to `clipId` by link or group, excluding itself. */
 function linkedSiblings(timeline: Timeline, clipId: string): Clip[] {
-  const found = findClip(timeline, clipId)
-  if (!found?.clip.linkGroupId) return []
-  const group = found.clip.linkGroupId
-  return timeline.tracks
-    .flatMap((t) => t.clips)
-    .filter((c) => c.linkGroupId === group && c.id !== clipId)
+  const ids = expandLinked(timeline, [clipId])
+  ids.delete(clipId)
+  return timeline.tracks.flatMap((t) => t.clips).filter((c) => ids.has(c.id))
 }
 
 /** A lock is only real if every mutation path consults it. */
@@ -524,9 +579,21 @@ export interface AddClipSpec {
   volume?: number
 }
 
+/**
+ * What a placement does when the target range is already occupied.
+ *
+ * - `normal`    refuses, leaving the edit untouched
+ * - `overwrite` trims or removes whatever sits under the new clip
+ * - `insert`    pushes everything from the insert point rightwards
+ */
+export type EditMode = 'normal' | 'overwrite' | 'insert'
+
+export const EDIT_MODES: EditMode[] = ['normal', 'overwrite', 'insert']
+
 export interface AddClipsArgs {
   timelineId?: string
   clips: AddClipSpec[]
+  mode?: EditMode
   /**
    * Video that carries sound lands as two linked clips, picture and sound, the
    * way every NLE does it. Set false to place the picture alone.
@@ -616,11 +683,25 @@ export function addClips(project: Project, args: AddClipsArgs): MutationResult {
         ? track.clips.reduce((max, c) => Math.max(max, clipEndFrame(c)), 0)
         : requireFrame(spec.startFrame, `${label}.startFrame`)
 
+    const mode: EditMode = args.mode ?? 'normal'
+    if (mode === 'insert') {
+      // Everything at or after the insert point slides by the new clip's length.
+      for (const existing of track.clips) {
+        if (existing.startFrame >= startFrame) existing.startFrame += durationFrames
+      }
+    } else if (mode === 'overwrite') {
+      const removedIds = clearRange(track, startFrame, startFrame + durationFrames)
+      if (removedIds.length > 0) {
+        warnings.push(`${label}: overwrote ${removedIds.length} clip(s) under the new one`)
+      }
+    }
+
     const blocker = overlapping(track, startFrame, startFrame + durationFrames, new Set())
     if (blocker) {
       throw new OpError(
         'refused',
-        `${label}: frames ${startFrame}-${startFrame + durationFrames} on track "${track.name}" are occupied by clip ${blocker.id}`,
+        `${label}: frames ${startFrame}-${startFrame + durationFrames} on track "${track.name}" are occupied by clip ${blocker.id}` +
+          (mode === 'normal' ? '. Use mode "overwrite" or "insert" to place it anyway.' : ''),
       )
     }
 
@@ -643,6 +724,7 @@ export function addClips(project: Project, args: AddClipsArgs): MutationResult {
       transform: defaultTransform(),
       crop: defaultCrop(),
       linkGroupId: null,
+      groupId: null,
       textContent: null,
       textStyle: null,
       effects: [],
@@ -749,6 +831,8 @@ export function addTexts(
       track = free
     }
 
+    // Text always places in normal mode: a title is an overlay, so overwriting
+    // or insert-shifting the picture under it would be surprising.
     const blocker = overlapping(track, startFrame, startFrame + durationFrames, new Set())
     if (blocker) {
       throw new OpError(
@@ -776,6 +860,7 @@ export function addTexts(
       transform: defaultTransform(),
       crop: defaultCrop(),
       linkGroupId: null,
+      groupId: null,
       textContent: spec.content,
       textStyle: { ...defaultTextStyle(), ...spec.style },
       effects: [],
@@ -1778,6 +1863,113 @@ export function setWorkZone(
         ? `Work zone set to frames ${zone.inFrame}-${zone.outFrame}`
         : 'Work zone cleared; the whole timeline is in play',
       affectedIds: [target.id],
+      warnings: [],
+    },
+  }
+}
+
+// --- Groups ---------------------------------------------------------------
+
+/**
+ * Binds clips so they move, trim and delete as one — Kdenlive's clip group.
+ * Grouping an already-grouped clip merges the groups rather than nesting them,
+ * because a nested group has no meaning the user can see.
+ */
+export function groupClips(
+  project: Project,
+  args: { timelineId?: string; clipIds: string[] },
+): MutationResult {
+  if (!Array.isArray(args.clipIds) || args.clipIds.length < 2) {
+    throw new OpError('invalid_argument', 'grouping needs at least two clips')
+  }
+  const target = requireTimeline(project, args.timelineId)
+  for (const id of args.clipIds) requireClip(target, id)
+
+  const next = clone(project)
+  const timeline = next.timelines.find((t) => t.id === target.id)!
+
+  // Absorb every group already touching the selection, so no clip is orphaned.
+  const absorbed = new Set<string>()
+  for (const id of args.clipIds) {
+    const existing = requireClip(timeline, id).clip.groupId
+    if (existing) absorbed.add(existing)
+  }
+
+  const groupId = newId()
+  const members: string[] = []
+  for (const track of timeline.tracks) {
+    for (const clip of track.clips) {
+      const inSelection = args.clipIds.includes(clip.id)
+      const inAbsorbed = clip.groupId !== null && absorbed.has(clip.groupId)
+      if (!inSelection && !inAbsorbed) continue
+      refuseIfLocked(track, 'grouping its clips')
+      clip.groupId = groupId
+      members.push(clip.id)
+    }
+  }
+
+  return {
+    project: touch(next),
+    receipt: {
+      operation: 'group_clips',
+      changed: true,
+      summary: `Grouped ${members.length} clip(s)`,
+      affectedIds: members,
+      warnings:
+        absorbed.size > 0
+          ? [`${absorbed.size} existing group(s) were merged into the new one`]
+          : [],
+    },
+  }
+}
+
+export function ungroupClips(
+  project: Project,
+  args: { timelineId?: string; clipIds: string[] },
+): MutationResult {
+  if (!Array.isArray(args.clipIds) || args.clipIds.length === 0) {
+    throw new OpError('invalid_argument', 'clipIds must be a non-empty array')
+  }
+  const target = requireTimeline(project, args.timelineId)
+  for (const id of args.clipIds) requireClip(target, id)
+
+  const groups = new Set<string>()
+  for (const id of args.clipIds) {
+    const groupId = requireClip(target, id).clip.groupId
+    if (groupId) groups.add(groupId)
+  }
+  if (groups.size === 0) {
+    return {
+      project,
+      receipt: {
+        operation: 'ungroup_clips',
+        changed: false,
+        summary: 'None of those clips is in a group',
+        affectedIds: [],
+        warnings: [],
+      },
+    }
+  }
+
+  const next = clone(project)
+  const timeline = next.timelines.find((t) => t.id === target.id)!
+  const freed: string[] = []
+  for (const track of timeline.tracks) {
+    for (const clip of track.clips) {
+      if (!clip.groupId || !groups.has(clip.groupId)) continue
+      refuseIfLocked(track, 'ungrouping its clips')
+      clip.groupId = null
+      freed.push(clip.id)
+    }
+  }
+
+  return {
+    project: touch(next),
+    receipt: {
+      operation: 'ungroup_clips',
+      changed: true,
+      summary: `Released ${freed.length} clip(s) from ${groups.size} group(s)`,
+      affectedIds: freed,
       warnings: [],
     },
   }

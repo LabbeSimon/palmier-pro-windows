@@ -102,6 +102,8 @@ function timelineSnapshot(project: Project, timeline: Timeline): Record<string, 
         fadeInFrames: clip.fadeInFrames,
         fadeOutFrames: clip.fadeOutFrames,
         effectCount: clip.effects?.length ?? 0,
+        ...(clip.groupId ? { groupId: clip.groupId } : {}),
+        ...(clip.linkGroupId ? { linkGroupId: clip.linkGroupId } : {}),
         ...(clip.transitionIn
           ? { transitionIn: { kind: clip.transitionIn.kind, durationFrames: clip.transitionIn.durationFrames } }
           : {}),
@@ -363,6 +365,13 @@ export const TOOLS: ToolDefinition[] = [
     inputSchema: object(
       {
         timeline_id: str('Defaults to the active timeline.'),
+        mode: {
+          type: 'string',
+          enum: ['normal', 'overwrite', 'insert'],
+          description:
+            'What to do when the range is occupied. normal refuses; overwrite trims or removes what is under; ' +
+            'insert pushes everything after the point rightwards. Default normal.',
+        },
         clips: arr(
           object(
             {
@@ -386,6 +395,7 @@ export const TOOLS: ToolDefinition[] = [
         ctx.store.apply((p) =>
           ops.addClips(p, {
             timelineId: args.timeline_id,
+            mode: args.mode,
             clips: (args.clips as any[]).map((c) => ({
               assetId: c.asset_id,
               trackId: c.track_id,
@@ -626,6 +636,38 @@ export const TOOLS: ToolDefinition[] = [
             style: prune({ fontSize: args.font_size, color: args.color }),
           }),
         ),
+      ),
+  },
+  {
+    name: 'group_clips',
+    description:
+      'Bind clips so they move, trim and delete as one. Grouping a clip that is already grouped merges the two ' +
+      'groups rather than nesting them. Audio linked to a video import is already bound and needs no grouping.',
+    inputSchema: object(
+      {
+        timeline_id: str('Defaults to the active timeline.'),
+        clip_ids: arr(str('Clip id.'), 'At least two clips.'),
+      },
+      ['clip_ids'],
+    ),
+    handler: (args, ctx) =>
+      receiptPayload(
+        ctx.store.apply((p) => ops.groupClips(p, { timelineId: args.timeline_id, clipIds: args.clip_ids })),
+      ),
+  },
+  {
+    name: 'ungroup_clips',
+    description: 'Release clips from their group. Reports honestly when none of them was grouped.',
+    inputSchema: object(
+      {
+        timeline_id: str('Defaults to the active timeline.'),
+        clip_ids: arr(str('Clip id.'), 'Clips whose groups should be dissolved.'),
+      },
+      ['clip_ids'],
+    ),
+    handler: (args, ctx) =>
+      receiptPayload(
+        ctx.store.apply((p) => ops.ungroupClips(p, { timelineId: args.timeline_id, clipIds: args.clip_ids })),
       ),
   },
   {

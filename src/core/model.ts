@@ -144,7 +144,10 @@ export interface Clip {
   opacity: number
   transform: Transform
   crop: Crop
+  /** Set by the A/V link when a video import places picture and sound together. */
   linkGroupId: string | null
+  /** Set by the user grouping clips so they move and delete as one. */
+  groupId: string | null
   /** Text clips only. */
   textContent: string | null
   textStyle: TextStyle | null

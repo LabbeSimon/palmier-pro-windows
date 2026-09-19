@@ -1368,3 +1368,15 @@ input[type='range']:hover::-webkit-slider-thumb {
   color: var(--warn);
   font-variant-numeric: tabular-nums;
 }
+
+.edit-mode {
+  width: auto;
+  font-size: var(--fs-meta);
+  padding: 1px var(--space-1);
+}
+
+/* A grouped clip carries a dashed top edge, so the binding is visible without
+   selecting anything. */
+.clip.grouped {
+  box-shadow: inset 0 2px 0 0 var(--warn);
+}
