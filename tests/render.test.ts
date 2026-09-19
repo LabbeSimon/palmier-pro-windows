@@ -104,13 +104,38 @@ describe('buildRenderCommand', () => {
     expect(withAudio.args).toContain('[vout]')
     expect(withAudio.args).toContain('[aout]')
 
+    // Sound now lands on its own linked track, so silencing the edit means
+    // muting that track — muting the picture track alone no longer does it.
     const silent = build((project, assetId) => {
       const placed = ops.addClips(project, { clips: [{ assetId }] }).project
-      const trackId = placed.timelines[0]!.tracks[0]!.id
-      return ops.setTrackFlags(placed, { trackId, muted: true }).project
+      let state = placed
+      for (const track of placed.timelines[0]!.tracks) {
+        state = ops.setTrackFlags(state, { trackId: track.id, muted: true }).project
+      }
+      return state
     })
     expect(silent.args).toContain('[vout]')
     expect(silent.args).not.toContain('[aout]')
+  })
+
+  it('places linked audio on its own track, so a video import fills both', () => {
+    const media = videoAsset()
+    const base = ops.addAssets(ops.emptyProject('T'), [media]).project
+    const placed = ops.addClips(base, { clips: [{ assetId: media.id, durationFrames: 60 }] }).project
+    const tracks = placed.timelines[0]!.tracks
+    expect(tracks[0]!.clips).toHaveLength(1)
+    expect(tracks[1]!.clips).toHaveLength(1)
+    expect(tracks[0]!.clips[0]!.linkGroupId).toBe(tracks[1]!.clips[0]!.linkGroupId)
+  })
+
+  it('honours linkAudio:false for a picture-only placement', () => {
+    const media = videoAsset()
+    const base = ops.addAssets(ops.emptyProject('T'), [media]).project
+    const placed = ops.addClips(base, {
+      clips: [{ assetId: media.id, durationFrames: 60 }],
+      linkAudio: false,
+    }).project
+    expect(placed.timelines[0]!.tracks[1]!.clips).toHaveLength(0)
   })
 
   it('drops a hidden track from the picture but keeps its audio', () => {
@@ -168,9 +193,10 @@ describe('buildRenderCommand', () => {
       return ops.addClips(withTrack, { clips: [{ assetId, trackId: v2.id, durationFrames: 60 }] }).project
     })
     const graph = filterGraph(command.args)
-    // Stage 0 overlays the bottom track onto base, stage 1 overlays the top onto stage 0.
-    expect(graph).toContain('[base][cv0]overlay')
-    expect(graph).toContain('[vs0][cv1]overlay')
+    // Input indices shift once linked audio takes one, so assert the chain
+    // shape rather than specific stream numbers.
+    expect(graph).toMatch(/\[base\]\[cv\d+\]overlay/)
+    expect(graph).toMatch(/\[vs0\]\[cv\d+\]overlay/)
   })
 
   it('refuses a crop that removes the whole frame', () => {

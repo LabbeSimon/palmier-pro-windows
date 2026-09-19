@@ -87,8 +87,14 @@ export function useEditor() {
         return null
       }
       await refresh()
-      const receipt = result.value as unknown as Partial<Receipt>
-      const text = describe?.(result.value) ?? (typeof receipt?.summary === 'string' ? receipt.summary : null)
+      // Mutations return a Receipt (`summary`); project-level actions return a
+      // snapshot with `message`. Without the second branch, New project looked
+      // like a dead button.
+      const payload = result.value as unknown as Partial<Receipt> & { message?: string }
+      const text =
+        describe?.(result.value) ??
+        (typeof payload?.summary === 'string' ? payload.summary : null) ??
+        (typeof payload?.message === 'string' ? payload.message : null)
       if (text) setStatus({ text, tone: 'ok' })
       return result.value
     },

@@ -108,8 +108,10 @@ describe('track gain', () => {
   it('renders a muted track without an audio stream', async () => {
     let state = ops.addAssets(ops.emptyProject('Mute'), [asset]).project
     state = ops.addClips(state, { clips: [{ assetId: asset.id, durationFrames: 20 }] }).project
-    const trackId = state.timelines[0]!.tracks[0]!.id
-    state = ops.setTrackFlags(state, { trackId, muted: true }).project
+    // A video import now fills picture and sound tracks, so both must be muted.
+    for (const track of state.timelines[0]!.tracks) {
+      state = ops.setTrackFlags(state, { trackId: track.id, muted: true }).project
+    }
 
     const output = join(workDir, 'muted.mp4')
     const timeline = state.timelines[0]!

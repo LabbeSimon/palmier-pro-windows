@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { readFile } from 'node:fs/promises'
@@ -9,7 +9,8 @@ import { OpError, type Receipt } from '../core/ops.js'
 import { FFmpegError, ffmpegVersion, generateThumbnail, probeAsset, renderAssetFrame, renderFrame, renderTimeline, type RenderHandle } from './media/ffmpeg.js'
 import { buildMenu } from './menu.js'
 import { MCPServer, DEFAULT_MCP_PORT } from './mcp/server.js'
-import { cacheDirFor, loadProject, ProjectStore, saveProject } from './project/store.js'
+import { basename } from 'node:path'
+import { cacheDirFor, isProjectFolder, loadProject, ProjectStore, saveProject } from './project/store.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -34,6 +35,7 @@ function createWindow(): void {
     backgroundColor: '#0e0e11',
     show: false,
     title: 'Palmier Win',
+    icon: join(__dirname, '../../resources/icon.png'),
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
@@ -124,23 +126,53 @@ const snapshot = () => ({
 
 handle('project:snapshot', () => snapshot())
 
-handle('project:new', () => {
+/** Unsaved work is never discarded without asking; silence here looked like a dead button. */
+async function confirmDiscard(action: string): Promise<boolean> {
+  if (!store.isDirty) return true
+  const { response } = await dialog.showMessageBox(window!, {
+    type: 'warning',
+    buttons: ['Cancel', `Discard and ${action}`],
+    defaultId: 0,
+    cancelId: 0,
+    title: 'Unsaved changes',
+    message: `"${store.project.name}" has unsaved changes.`,
+    detail: `They will be lost if you ${action} without saving.`,
+  })
+  return response === 1
+}
+
+handle('project:new', async () => {
+  if (!(await confirmDiscard('start a new project'))) {
+    return { ...snapshot(), message: 'Kept the current project' }
+  }
   store.replace(ops.emptyProject())
-  return snapshot()
+  return { ...snapshot(), message: 'Started a new project' }
 })
 
 handle('project:open', async (path?: string) => {
   let target = path
   if (!target) {
+    if (!(await confirmDiscard('open another project'))) {
+      return { ...snapshot(), message: 'Kept the current project' }
+    }
     const picked = await dialog.showOpenDialog(window!, {
-      title: 'Open project',
+      title: 'Open a .palmier project folder',
       properties: ['openDirectory'],
+      buttonLabel: 'Open project',
     })
-    if (picked.canceled || !picked.filePaths[0]) return snapshot()
+    if (picked.canceled || !picked.filePaths[0]) return { ...snapshot(), message: 'Open cancelled' }
     target = picked.filePaths[0]
   }
-  store.replace(await loadProject(target))
-  return snapshot()
+  // Validated before loading so the refusal names the folder instead of leaking ENOENT.
+  if (!(await isProjectFolder(target))) {
+    throw new OpError(
+      'not_a_project',
+      `"${basename(target)}" is not a Palmier project. Choose a folder that contains project.json.`,
+    )
+  }
+  const loaded = await loadProject(target)
+  store.replace(loaded)
+  return { ...snapshot(), message: `Opened "${loaded.name}"` }
 })
 
 handle('project:save', async (saveAs?: boolean) => {
@@ -156,7 +188,7 @@ handle('project:save', async (saveAs?: boolean) => {
   }
   const saved = await saveProject(store.project, target)
   store.markSaved(saved.path!)
-  return snapshot()
+  return { ...snapshot(), message: `Saved to ${saved.path}` }
 })
 
 handle('project:undo', () => {
@@ -290,6 +322,11 @@ handle('render:cancel', () => {
   if (!activeExport) return { cancelled: false }
   activeExport.cancel()
   return { cancelled: true }
+})
+
+handle('clipboard:write', (text: string) => {
+  clipboard.writeText(text)
+  return true
 })
 
 handle('shell:reveal', (path: string) => {

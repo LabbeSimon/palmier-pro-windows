@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 import type { Project } from '../core/model.js'
 import type { Receipt } from '../core/ops.js'
@@ -81,6 +81,14 @@ const api = {
     cancel: () => invoke<{ cancelled: boolean }>('render:cancel'),
     onProgress: (listener: (progress: RenderProgress) => void) => subscribe('render:progress', listener),
   },
+  files: {
+    /**
+     * Electron 32 removed `File.path`; `webUtils.getPathForFile` is the only
+     * way left to turn a dropped File into a real path, and it must be called
+     * in the preload because the renderer has no access to it.
+     */
+    pathFor: (file: File): string => webUtils.getPathForFile(file),
+  },
   menu: {
     /** Menu items and their accelerators arrive here and reuse the UI's own handlers. */
     onCommand: (listener: (command: MenuCommand) => void) => subscribe('menu:command', listener),
@@ -88,6 +96,7 @@ const api = {
   system: {
     info: () => invoke<{ ffmpeg: string; electron: string; node: string }>('system:info'),
     reveal: (path: string) => invoke<boolean>('shell:reveal', path),
+    copyToClipboard: (text: string) => invoke<boolean>('clipboard:write', text),
     onMcpStatus: (listener: (status: Snapshot['mcp']) => void) => subscribe('mcp:status', listener),
   },
 }

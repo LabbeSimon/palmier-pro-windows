@@ -163,6 +163,34 @@ function sortClips(track: Track): void {
   track.clips.sort((a, b) => a.startFrame - b.startFrame)
 }
 
+/** Adds every clip sharing a link group with the given ids. */
+function expandLinked(timeline: Timeline, clipIds: string[]): Set<string> {
+  const ids = new Set(clipIds)
+  const groups = new Set<string>()
+  for (const track of timeline.tracks) {
+    for (const clip of track.clips) {
+      if (ids.has(clip.id) && clip.linkGroupId) groups.add(clip.linkGroupId)
+    }
+  }
+  if (groups.size === 0) return ids
+  for (const track of timeline.tracks) {
+    for (const clip of track.clips) {
+      if (clip.linkGroupId && groups.has(clip.linkGroupId)) ids.add(clip.id)
+    }
+  }
+  return ids
+}
+
+/** Clips linked to `clipId`, excluding itself. */
+function linkedSiblings(timeline: Timeline, clipId: string): Clip[] {
+  const found = findClip(timeline, clipId)
+  if (!found?.clip.linkGroupId) return []
+  const group = found.clip.linkGroupId
+  return timeline.tracks
+    .flatMap((t) => t.clips)
+    .filter((c) => c.linkGroupId === group && c.id !== clipId)
+}
+
 /** A lock is only real if every mutation path consults it. */
 function refuseIfLocked(track: Track, what: string): void {
   if (track.locked) {
@@ -497,6 +525,11 @@ export interface AddClipSpec {
 export interface AddClipsArgs {
   timelineId?: string
   clips: AddClipSpec[]
+  /**
+   * Video that carries sound lands as two linked clips, picture and sound, the
+   * way every NLE does it. Set false to place the picture alone.
+   */
+  linkAudio?: boolean
 }
 
 /** Frames an asset provides at a given timeline rate. Stills have no intrinsic length. */
@@ -618,10 +651,36 @@ export function addClips(project: Project, args: AddClipsArgs): MutationResult {
     sortClips(track)
     created.push(clip.id)
 
-    if (asset.type === 'video' && asset.hasAudio && track.type !== 'audio') {
-      warnings.push(
-        `"${asset.name}" has an audio track; add it separately to an audio track if you want it in the mix.`,
+    // Picture and sound arrive together and stay together.
+    if (asset.hasAudio && track.type !== 'audio' && args.linkAudio !== false) {
+      const audioTrack = timeline.tracks.find(
+        (t) =>
+          t.type === 'audio' &&
+          !t.locked &&
+          !overlapping(t, startFrame, startFrame + durationFrames, new Set()),
       )
+      if (!audioTrack) {
+        warnings.push(
+          `"${asset.name}" has sound but no free audio track was available; the picture was placed alone.`,
+        )
+      } else {
+        const linkGroupId = newId()
+        clip.linkGroupId = linkGroupId
+        const audioClip: Clip = {
+          ...clone(clip),
+          id: newId(),
+          mediaType: 'audio',
+          sourceClipType: asset.type,
+          linkGroupId,
+          transform: defaultTransform(),
+          crop: defaultCrop(),
+          effects: [],
+          transitionIn: null,
+        }
+        audioTrack.clips.push(audioClip)
+        sortClips(audioTrack)
+        created.push(audioClip.id)
+      }
     }
   }
 
@@ -795,7 +854,7 @@ export function removeClips(project: Project, args: RemoveClipsArgs): MutationRe
 
   const next = clone(project)
   const timeline = next.timelines.find((t) => t.id === target.id)!
-  const ids = new Set(args.clipIds)
+  const ids = expandLinked(timeline, args.clipIds)
 
   for (const track of timeline.tracks) {
     const removed = track.clips.filter((c) => ids.has(c.id))
@@ -818,8 +877,11 @@ export function removeClips(project: Project, args: RemoveClipsArgs): MutationRe
     receipt: {
       operation: 'remove_clips',
       changed: true,
-      summary: `Removed ${args.clipIds.length} clip(s)${args.ripple ? ' and closed the gaps' : ''}`,
-      affectedIds: args.clipIds,
+      summary:
+        `Removed ${ids.size} clip(s)` +
+        (ids.size > args.clipIds.length ? ' including linked audio' : '') +
+        (args.ripple ? ' and closed the gaps' : ''),
+      affectedIds: [...ids],
       warnings: [],
     },
   }
@@ -922,10 +984,24 @@ export function moveClips(
 
   const next = clone(project)
   const timeline = next.timelines.find((t) => t.id === target.id)!
-  const movingIds = new Set(args.moves.map((m) => m.clipId))
+
+  // A linked sibling shifts by the same delta so picture and sound stay in sync.
+  const expanded: MoveSpec[] = [...args.moves]
+  for (const move of args.moves) {
+    if (move.startFrame === undefined) continue
+    const loc = findClip(timeline, move.clipId)
+    if (!loc) continue
+    const delta = move.startFrame - loc.clip.startFrame
+    for (const sibling of linkedSiblings(timeline, move.clipId)) {
+      if (expanded.some((m) => m.clipId === sibling.id)) continue
+      expanded.push({ clipId: sibling.id, startFrame: Math.max(0, sibling.startFrame + delta) })
+    }
+  }
+
+  const movingIds = new Set(expanded.map((m) => m.clipId))
   const touched: string[] = []
 
-  for (const [i, move] of args.moves.entries()) {
+  for (const [i, move] of expanded.entries()) {
     const label = `moves[${i}]`
     const loc = requireClip(timeline, move.clipId)
     const startFrame = move.startFrame === undefined ? loc.clip.startFrame : requireFrame(move.startFrame, `${label}.startFrame`)
@@ -963,7 +1039,9 @@ export function moveClips(
     receipt: {
       operation: 'move_clips',
       changed: true,
-      summary: `Moved ${touched.length} clip(s)`,
+      summary:
+        `Moved ${touched.length} clip(s)` +
+        (touched.length > args.moves.length ? ' including linked audio' : ''),
       affectedIds: touched,
       warnings: [],
     },

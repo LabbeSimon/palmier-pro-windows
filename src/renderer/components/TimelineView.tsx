@@ -151,9 +151,15 @@ export function TimelineView(props: Props) {
     [props.assets],
   )
 
+  /**
+   * Only picture clips get the filmstrip. A linked audio clip references the
+   * same asset, so keying on the asset alone would paint video frames onto a
+   * sound clip and hide that it is audio at all.
+   */
   const posterStyle = useCallback(
-    (mediaRef: string): React.CSSProperties | undefined => {
-      const poster = props.thumbnails[mediaRef]
+    (clip: { mediaRef: string; mediaType: string }): React.CSSProperties | undefined => {
+      if (clip.mediaType === 'audio' || clip.mediaType === 'subtitle') return undefined
+      const poster = props.thumbnails[clip.mediaRef]
       return poster ? { backgroundImage: `url(${poster})` } : undefined
     },
     [props.thumbnails],
@@ -359,7 +365,7 @@ export function TimelineView(props: Props) {
                   const width = Math.max(2, Math.round(clip.durationFrames * pixelsPerFrame))
                   const selected = props.selectedClipIds.includes(clip.id)
                   const name = clip.textContent ?? assetName(clip.mediaRef) ?? clip.mediaType
-                  const poster = posterStyle(clip.mediaRef)
+                  const poster = posterStyle(clip)
                   const effectCount = clip.effects?.length ?? 0
 
                   return (

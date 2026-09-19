@@ -7,7 +7,7 @@
 
 import { EventEmitter } from 'node:events'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 
@@ -150,9 +150,32 @@ export async function saveProject(project: Project, projectPath: string): Promis
   return saved
 }
 
+/**
+ * True when the folder actually holds a project. Checked before loading so a
+ * wrong folder is refused by name rather than surfaced as a raw ENOENT.
+ */
+export async function isProjectFolder(folderPath: string): Promise<boolean> {
+  try {
+    await readFile(join(folderPath, PROJECT_FILE_NAME), 'utf8')
+    return true
+  } catch {
+    return false
+  }
+}
+
 export async function loadProject(projectPath: string): Promise<Project> {
   const target = projectPath.endsWith('.json') ? projectPath : join(projectPath, PROJECT_FILE_NAME)
-  const raw = await readFile(target, 'utf8')
+
+  let raw: string
+  try {
+    raw = await readFile(target, 'utf8')
+  } catch {
+    throw new OpError(
+      'not_a_project',
+      `"${basename(projectPath)}" is not a Palmier project — it has no ${PROJECT_FILE_NAME}. ` +
+        `Pick the .palmier folder itself, not the folder containing it.`,
+    )
+  }
 
   let parsed: ProjectFile
   try {

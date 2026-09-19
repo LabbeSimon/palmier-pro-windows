@@ -1163,3 +1163,82 @@ input[type='range']:hover::-webkit-slider-thumb {
 .mixer-body > .hint {
   margin-top: 0;
 }
+
+/* --- OS file drop -------------------------------------------------------- */
+
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background: rgba(10, 10, 14, 0.72);
+  backdrop-filter: blur(3px);
+  pointer-events: none;
+}
+.drop-card {
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  padding: var(--space-5) 56px;
+  text-align: center;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+.drop-icon {
+  width: 34px;
+  height: 34px;
+  color: var(--accent);
+  display: block;
+  margin: 0 auto var(--space-2);
+}
+.drop-title {
+  margin: 0;
+  font-size: var(--fs-title);
+  font-weight: var(--fw-semibold);
+}
+.drop-detail {
+  margin: var(--space-1) 0 0;
+  font-size: var(--fs-meta);
+  color: var(--text-muted);
+}
+
+/* --- Status bar MCP block ------------------------------------------------ */
+
+.mcp-block {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.mcp-block .offline {
+  color: var(--text-faint);
+}
+/* A text-weight action: it belongs to the sentence, not to the chrome. */
+.link-btn {
+  background: transparent;
+  border: 0;
+  padding: 0 2px;
+  color: var(--accent);
+  font-size: var(--fs-meta);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.link-btn:hover {
+  color: var(--text);
+  background: transparent;
+}
+.status .divider {
+  height: 12px;
+}
+
+/* An audio clip states its nature with a level band, not a borrowed filmstrip. */
+.clip.audio {
+  background-image: repeating-linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.16) 0 1px,
+    transparent 1px 4px
+  );
+  background-size: auto 46%;
+  background-position: left 72%;
+  background-repeat: repeat-x;
+}

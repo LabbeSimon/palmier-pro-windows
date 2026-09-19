@@ -63,7 +63,6 @@
         }
       ],
       "artifactName": "${productName}-${version}-${arch}.${ext}",
-      "signAndEditExecutable": false,
       "extraResources": [
         {
           "from": "resources/ffmpeg/win32-x64",
@@ -72,13 +71,18 @@
             "**/*"
           ]
         }
-      ]
+      ],
+      "icon": "resources/icon.ico"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
-      "artifactName": "${productName}-${version}-x64-setup.${ext}"
+      "artifactName": "${productName}-${version}-x64-setup.${ext}",
+      "installerIcon": "resources/icon.ico",
+      "uninstallerIcon": "resources/icon.ico",
+      "installerHeaderIcon": "resources/icon.ico",
+      "shortcutName": "Palmier Win"
     },
     "linux": {
       "target": [
@@ -107,7 +111,8 @@
           ]
         }
       ],
-      "maintainer": "Simon Labbé <contact@simonlabbe.fr>"
+      "maintainer": "Simon Labbé <contact@simonlabbe.fr>",
+      "icon": "resources/icon.png"
     },
     "portable": {
       "artifactName": "${productName}-${version}-x64-portable.${ext}"

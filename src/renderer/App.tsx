@@ -4,6 +4,7 @@ import { timelineTotalFrames, type Clip } from '../core/model.js'
 import type { ClipProperties } from '../core/ops.js'
 import type { MenuCommand } from '../main/menu.js'
 import { AudioMixer } from './components/AudioMixer.js'
+import { DropZone } from './components/DropZone.js'
 import { EffectsPanel } from './components/EffectsPanel.js'
 import { Inspector } from './components/Inspector.js'
 import { MediaPanel } from './components/MediaPanel.js'
@@ -211,6 +212,7 @@ export function App() {
 
   return (
     <div className="app">
+      <DropZone onFiles={(paths) => void run(() => window.palmier.media.import(paths))} />
       <Toolbar
         project={project}
         timeline={timeline}
