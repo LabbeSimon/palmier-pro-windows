@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 import type { Project } from '../core/model.js'
 import type { Receipt } from '../core/ops.js'
+import type { MenuCommand } from '../main/menu.js'
 
 export interface Snapshot {
   project: Project
@@ -57,6 +58,13 @@ const api = {
     setActiveTimeline: (args: unknown) => invoke<Receipt>('ops:setActiveTimeline', args),
     setProjectSettings: (args: unknown) => invoke<Receipt>('ops:setProjectSettings', args),
     removeAssets: (args: unknown) => invoke<Receipt>('ops:removeAssets', args),
+    shiftClips: (args: unknown) => invoke<Receipt>('ops:shiftClips', args),
+    addEffect: (args: unknown) => invoke<Receipt>('ops:addEffect', args),
+    removeEffect: (args: unknown) => invoke<Receipt>('ops:removeEffect', args),
+    setEffectParams: (args: unknown) => invoke<Receipt>('ops:setEffectParams', args),
+    reorderEffect: (args: unknown) => invoke<Receipt>('ops:reorderEffect', args),
+    addTransition: (args: unknown) => invoke<Receipt>('ops:addTransition', args),
+    removeTransition: (args: unknown) => invoke<Receipt>('ops:removeTransition', args),
   },
   media: {
     import: (paths?: string[]) => invoke<Receipt>('media:import', paths),
@@ -66,10 +74,16 @@ const api = {
   },
   render: {
     frame: (frame: number) => invoke<string>('render:frame', frame),
+    assetFrame: (assetId: string, seconds: number) =>
+      invoke<string>('render:assetFrame', { assetId, seconds }),
     export: (args: { outputPath?: string; quality?: 'draft' | 'balanced' | 'high' }) =>
       invoke<{ cancelled: boolean; outputPath?: string }>('render:export', args),
     cancel: () => invoke<{ cancelled: boolean }>('render:cancel'),
     onProgress: (listener: (progress: RenderProgress) => void) => subscribe('render:progress', listener),
+  },
+  menu: {
+    /** Menu items and their accelerators arrive here and reuse the UI's own handlers. */
+    onCommand: (listener: (command: MenuCommand) => void) => subscribe('menu:command', listener),
   },
   system: {
     info: () => invoke<{ ffmpeg: string; electron: string; node: string }>('system:info'),

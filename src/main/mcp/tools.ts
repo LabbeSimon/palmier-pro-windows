@@ -20,6 +20,13 @@ import {
   type Timeline,
 } from '../../core/model.js'
 import * as ops from '../../core/ops.js'
+import {
+  EFFECT_CATEGORIES,
+  EFFECT_DEFINITIONS,
+  EFFECTS_BY_ID,
+} from '../../core/effects.js'
+import { TRANSITION_LABELS } from '../../core/transitions.js'
+import { TRANSITION_KINDS } from '../../core/model.js'
 import { OpError, type Receipt } from '../../core/ops.js'
 import { framesToTimecode } from '../../core/timecode.js'
 import { probeAsset, renderFrame, renderTimeline } from '../media/ffmpeg.js'
@@ -77,6 +84,8 @@ function timelineSnapshot(project: Project, timeline: Timeline): Record<string, 
       name: track.name,
       muted: track.muted,
       hidden: track.hidden,
+      locked: track.locked,
+      volume: track.volume,
       clips: track.clips.map((clip) => ({
         id: clip.id,
         mediaType: clip.mediaType,
@@ -92,6 +101,10 @@ function timelineSnapshot(project: Project, timeline: Timeline): Record<string, 
         opacity: clip.opacity,
         fadeInFrames: clip.fadeInFrames,
         fadeOutFrames: clip.fadeOutFrames,
+        effectCount: clip.effects?.length ?? 0,
+        ...(clip.transitionIn
+          ? { transitionIn: { kind: clip.transitionIn.kind, durationFrames: clip.transitionIn.durationFrames } }
+          : {}),
         ...(clip.textContent ? { textContent: clip.textContent } : {}),
       })),
     })),
@@ -144,14 +157,25 @@ export const TOOLS: ToolDefinition[] = [
           `${framesToTimecode(timelineDisplayFrames(timeline), timeline.fps)}`,
       ]
       timeline.tracks.forEach((track, index) => {
-        const flags = [track.muted ? 'muted' : null, track.hidden ? 'hidden' : null].filter(Boolean).join(' ')
+        const flags = [
+          track.muted ? 'muted' : null,
+          track.hidden ? 'hidden' : null,
+          track.locked ? 'locked' : null,
+        ]
+          .filter(Boolean)
+          .join(' ')
         lines.push(`[${index}] ${track.name ?? track.type} (${track.type})${flags ? ` — ${flags}` : ''}`)
         if (track.clips.length === 0) lines.push('     (empty)')
         for (const clip of track.clips) {
           const name = clip.textContent ?? project.assets.find((a) => a.id === clip.mediaRef)?.name ?? clip.mediaType
+          const extras = [
+            clip.transitionIn ? `${clip.transitionIn.kind} ${clip.transitionIn.durationFrames}f` : null,
+            clip.effects?.length ? `${clip.effects.length} fx` : null,
+          ].filter(Boolean)
           lines.push(
             `     ${framesToTimecode(clip.startFrame, timeline.fps)} → ` +
-              `${framesToTimecode(clipEndFrame(clip), timeline.fps)}  ${JSON.stringify(name)}  ${clip.id}`,
+              `${framesToTimecode(clipEndFrame(clip), timeline.fps)}  ${JSON.stringify(name)}` +
+              `${extras.length ? `  [${extras.join(', ')}]` : ''}  ${clip.id}`,
           )
         }
       })
@@ -308,6 +332,8 @@ export const TOOLS: ToolDefinition[] = [
         track_id: str('Track to change.'),
         muted: bool('Exclude this track from the audio mix.'),
         hidden: bool('Exclude this track from the picture.'),
+        locked: bool('Refuse every edit on this track until unlocked.'),
+        volume: num('Linear track gain applied to the whole track in the mix.'),
         name: str('New display name.'),
       },
       ['track_id'],
@@ -320,6 +346,8 @@ export const TOOLS: ToolDefinition[] = [
             trackId: args.track_id,
             muted: args.muted,
             hidden: args.hidden,
+            locked: args.locked,
+            volume: args.volume,
             name: args.name,
           }),
         ),
@@ -716,3 +744,233 @@ function prune<T extends Record<string, any>>(value: T): T {
 }
 
 export const TOOLS_BY_NAME = new Map(TOOLS.map((tool) => [tool.name, tool]))
+
+// --- Effects, transitions and tracks -------------------------------------
+
+const EFFECT_TOOLS: ToolDefinition[] = [
+  {
+    name: 'list_effects',
+    description:
+      'Catalogue of every available effect with its parameters and bounds. Call this before apply_effect so you use ' +
+      'real parameter names and stay inside the accepted range, instead of guessing and being refused.',
+    inputSchema: object({
+      category: {
+        type: 'string',
+        enum: EFFECT_CATEGORIES,
+        description: 'Restrict to one category.',
+      },
+      kind: { type: 'string', enum: ['video', 'audio'], description: 'Restrict to video or audio effects.' },
+    }),
+    handler: (args) => {
+      const matches = EFFECT_DEFINITIONS.filter(
+        (d) => (!args.category || d.category === args.category) && (!args.kind || d.kind === args.kind),
+      )
+      return {
+        count: matches.length,
+        effects: matches.map((d) => ({
+          id: d.id,
+          name: d.name,
+          category: d.category,
+          kind: d.kind,
+          description: d.description,
+          params: d.params.map((p) => ({
+            key: p.key,
+            label: p.label,
+            min: p.min,
+            max: p.max,
+            default: p.default,
+            ...(p.unit ? { unit: p.unit } : {}),
+          })),
+        })),
+      }
+    },
+  },
+  {
+    name: 'apply_effect',
+    description:
+      'Add an effect to one or more clips. Effects render in stack order, so a grade added before a blur is blurred ' +
+      'too. Parameters outside their declared bounds are refused rather than clamped.',
+    inputSchema: object(
+      {
+        timeline_id: str('Defaults to the active timeline.'),
+        clip_ids: arr(str('Clip id.'), 'Clips to affect.'),
+        effect: str('Effect id from list_effects.'),
+        params: { type: 'object', description: 'Parameter values by key. Defaults are used for anything omitted.' },
+        index: int('Stack position. Appended when omitted.'),
+      },
+      ['clip_ids', 'effect'],
+    ),
+    handler: (args, ctx) =>
+      receiptPayload(
+        ctx.store.apply((p) =>
+          ops.addEffect(p, {
+            timelineId: args.timeline_id,
+            clipIds: args.clip_ids,
+            definitionId: args.effect,
+            params: args.params,
+            index: args.index,
+          }),
+        ),
+      ),
+  },
+  {
+    name: 'get_clip_effects',
+    description: 'Read the effect stack on a clip, with each effect’s stable id and current parameter values.',
+    inputSchema: object({ timeline_id: str('Defaults to the active timeline.'), clip_id: str('Clip to read.') }, ['clip_id']),
+    handler: (args, ctx) => {
+      const timeline = resolveTimeline(ctx.store.project, args.timeline_id)
+      const found = ops.findClip(timeline, args.clip_id)
+      if (!found) throw new OpError('not_found', `clip ${args.clip_id} is not on timeline ${timeline.id}`)
+      return {
+        clipId: args.clip_id,
+        effects: (found.clip.effects ?? []).map((e, index) => {
+          const definition = EFFECTS_BY_ID.get(e.definitionId)
+          return {
+            id: e.id,
+            index,
+            effect: e.definitionId,
+            name: definition?.name ?? e.definitionId,
+            kind: definition?.kind ?? 'video',
+            enabled: e.enabled,
+            params: e.params,
+          }
+        }),
+        transitionIn: found.clip.transitionIn
+          ? {
+              id: found.clip.transitionIn.id,
+              kind: found.clip.transitionIn.kind,
+              durationFrames: found.clip.transitionIn.durationFrames,
+            }
+          : null,
+      }
+    },
+  },
+  {
+    name: 'set_effect',
+    description:
+      'Change an effect’s parameters, or bypass it with enabled=false. Bypassing is how you A/B a look without ' +
+      'losing the settings.',
+    inputSchema: object(
+      {
+        timeline_id: str('Defaults to the active timeline.'),
+        clip_id: str('Clip holding the effect.'),
+        effect_id: str('Effect id from get_clip_effects.'),
+        params: { type: 'object', description: 'Parameter values to change.' },
+        enabled: bool('Set false to bypass without removing.'),
+      },
+      ['clip_id', 'effect_id'],
+    ),
+    handler: (args, ctx) =>
+      receiptPayload(
+        ctx.store.apply((p) =>
+          ops.setEffectParams(p, {
+            timelineId: args.timeline_id,
+            clipId: args.clip_id,
+            effectId: args.effect_id,
+            params: args.params,
+            enabled: args.enabled,
+          }),
+        ),
+      ),
+  },
+  {
+    name: 'remove_effect',
+    description:
+      'Delete an effect from a clip’s stack permanently. To compare a look without losing its settings, use ' +
+      'set_effect with enabled=false instead.',
+    inputSchema: object(
+      {
+        timeline_id: str('Defaults to the active timeline.'),
+        clip_id: str('Clip holding the effect.'),
+        effect_id: str('Effect to remove.'),
+      },
+      ['clip_id', 'effect_id'],
+    ),
+    handler: (args, ctx) =>
+      receiptPayload(
+        ctx.store.apply((p) =>
+          ops.removeEffect(p, { timelineId: args.timeline_id, clipId: args.clip_id, effectId: args.effect_id }),
+        ),
+      ),
+  },
+  {
+    name: 'reorder_effect',
+    description:
+      'Move an effect within a clip’s stack. Order matters: a blur before a grade looks different from a grade ' +
+      'before a blur.',
+    inputSchema: object(
+      {
+        timeline_id: str('Defaults to the active timeline.'),
+        clip_id: str('Clip holding the effect.'),
+        effect_id: str('Effect to move.'),
+        to_index: int('Zero-based destination position.'),
+      },
+      ['clip_id', 'effect_id', 'to_index'],
+    ),
+    handler: (args, ctx) =>
+      receiptPayload(
+        ctx.store.apply((p) =>
+          ops.reorderEffect(p, {
+            timelineId: args.timeline_id,
+            clipId: args.clip_id,
+            effectId: args.effect_id,
+            toIndex: args.to_index,
+          }),
+        ),
+      ),
+  },
+  {
+    name: 'list_transitions',
+    description:
+      'The transition kinds add_transition accepts, with their display names. Fades are cheap; wipes and circles ' +
+      'evaluate per pixel and render several times slower.',
+    inputSchema: object({}),
+    handler: () => ({
+      transitions: TRANSITION_KINDS.map((kind) => ({ kind, name: TRANSITION_LABELS[kind] })),
+    }),
+  },
+  {
+    name: 'add_transition',
+    description:
+      'Place a transition between a clip and the one before it on the same track. The incoming clip is pulled back ' +
+      'over its predecessor using its own head handle, so it needs at least that many frames trimmed off its start — ' +
+      'the call is refused, not shortened, when it does not. Clip positions never move, so removing it is lossless.',
+    inputSchema: object(
+      {
+        timeline_id: str('Defaults to the active timeline.'),
+        clip_id: str('Incoming clip — the one the transition leads into.'),
+        kind: { type: 'string', enum: TRANSITION_KINDS, description: 'Default dissolve.' },
+        duration_frames: int('Overlap length. Defaults to one second.'),
+      },
+      ['clip_id'],
+    ),
+    handler: (args, ctx) =>
+      receiptPayload(
+        ctx.store.apply((p) =>
+          ops.addTransition(p, {
+            timelineId: args.timeline_id,
+            clipId: args.clip_id,
+            kind: args.kind,
+            durationFrames: args.duration_frames,
+          }),
+        ),
+      ),
+  },
+  {
+    name: 'remove_transition',
+    description: 'Remove the transition leading into a clip. Reports honestly when there is none.',
+    inputSchema: object(
+      { timeline_id: str('Defaults to the active timeline.'), clip_id: str('Clip to clear.') },
+      ['clip_id'],
+    ),
+    handler: (args, ctx) =>
+      receiptPayload(
+        ctx.store.apply((p) =>
+          ops.removeTransition(p, { timelineId: args.timeline_id, clipId: args.clip_id }),
+        ),
+      ),
+  },
+]
+
+TOOLS.push(...EFFECT_TOOLS)
+for (const tool of EFFECT_TOOLS) TOOLS_BY_NAME.set(tool.name, tool)

@@ -3,6 +3,10 @@
  * seconds only appear at the FFmpeg and UI boundaries.
  */
 
+import type { Effect } from './effects.js'
+
+export type { Effect } from './effects.js'
+
 export const CLIP_TYPES = ['video', 'audio', 'image', 'text', 'sequence', 'subtitle'] as const
 export type ClipType = (typeof CLIP_TYPES)[number]
 
@@ -79,6 +83,45 @@ export function defaultTextStyle(): TextStyle {
   }
 }
 
+export type TransitionKind =
+  | 'dissolve'
+  | 'fade-black'
+  | 'fade-white'
+  | 'wipe-left'
+  | 'wipe-right'
+  | 'wipe-up'
+  | 'wipe-down'
+  | 'slide-left'
+  | 'slide-right'
+  | 'circle-open'
+  | 'circle-close'
+
+export const TRANSITION_KINDS: TransitionKind[] = [
+  'dissolve',
+  'fade-black',
+  'fade-white',
+  'wipe-left',
+  'wipe-right',
+  'wipe-up',
+  'wipe-down',
+  'slide-left',
+  'slide-right',
+  'circle-open',
+  'circle-close',
+]
+
+/**
+ * A transition lives on the incoming clip and overlaps the clip before it on the
+ * same track. Storing it on one side keeps a single owner and avoids the classic
+ * NLE bug where both neighbours claim the same overlap.
+ */
+export interface Transition {
+  id: string
+  kind: TransitionKind
+  /** Overlap length; consumes the tail of the previous clip. */
+  durationFrames: number
+}
+
 export interface Clip {
   id: string
   /** Asset id, or timeline id when sourceClipType is 'sequence'. */
@@ -105,6 +148,10 @@ export interface Clip {
   /** Text clips only. */
   textContent: string | null
   textStyle: TextStyle | null
+  /** Effect stack, applied in order. */
+  effects: Effect[]
+  /** Transition into this clip, overlapping its predecessor. */
+  transitionIn: Transition | null
 }
 
 export interface Track {
@@ -113,6 +160,10 @@ export interface Track {
   name: string | null
   muted: boolean
   hidden: boolean
+  /** A locked track refuses every edit until it is unlocked. */
+  locked: boolean
+  /** Linear track gain applied to the whole track in the mix. */
+  volume: number
   clips: Clip[]
 }
 
@@ -176,6 +227,11 @@ export interface ProjectFile {
 
 export function clipEndFrame(clip: Clip): number {
   return clip.startFrame + clip.durationFrames
+}
+
+/** Frames of overlap this clip's incoming transition claims from its predecessor. */
+export function transitionOverlap(clip: Clip): number {
+  return clip.transitionIn ? Math.max(0, clip.transitionIn.durationFrames) : 0
 }
 
 /** Source frames consumed by the visible portion, accounting for speed. */

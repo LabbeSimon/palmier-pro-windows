@@ -34,15 +34,71 @@
   --radius-md: 6px;
   --radius-lg: 10px;
 
-  --font: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  /* Mono is reserved for measurement — timecode, frame counts — never as decoration. */
   --font-mono: 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
-  --fs-xs: 11px;
-  --fs-sm: 12px;
-  --fs-md: 13px;
-  --fs-lg: 15px;
+
+  /* Type roles, named for the job they do. Steps are far enough apart to read
+     as different roles at a glance, which a uniform ramp never achieves. */
+  --fs-caption: 10px;   /* section + group headers, all caps */
+  --fs-meta: 11px;      /* asset metadata, clip duration */
+  --fs-body: 12px;      /* field labels, values, controls */
+  --fs-control: 12.5px; /* toolbar buttons */
+  --fs-data: 13px;      /* inline timecode */
+  --fs-title: 15px;     /* project name */
+  --fs-transport: 19px; /* the transport timecode, the one number you hunt for */
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+
+  /* Caps headers need tracking or they clot; data needs none. */
+  --tracking-caps: 0.09em;
+  --tracking-tight: -0.01em;
 
   --ruler-height: 26px;
-  --track-header-width: 148px;
+  --track-header-width: 156px;
+  --transport-height: 44px;
+}
+
+/* Numbers that change in place must not reflow their neighbours. */
+.tnum,
+input[type='number'],
+.clip-meta,
+.asset .meta,
+.ruler .tick,
+.status {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* Browser surfaces carry the design too. */
+::selection {
+  background: var(--accent-dim);
+  color: #fff;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 5px;
+  border: 2px solid var(--bg-panel);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #4c4c5a;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 * {
@@ -60,7 +116,7 @@ body {
   background: var(--bg-app);
   color: var(--text);
   font-family: var(--font);
-  font-size: var(--fs-md);
+  font-size: var(--fs-body);
   overflow: hidden;
   user-select: none;
 }
@@ -93,7 +149,7 @@ button.primary:hover:not(:disabled) {
 input,
 select {
   font: inherit;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-body);
   color: var(--text);
   background: var(--bg-input);
   border: 1px solid var(--border);
@@ -113,12 +169,17 @@ select:focus {
   display: grid;
   grid-template-rows: auto 1fr auto auto;
   height: 100%;
+  /* Without these a long toolbar widens the grid past the window and silently
+     clips the right-hand column. */
+  min-width: 0;
+  overflow: hidden;
 }
 
 .workspace {
   display: grid;
-  grid-template-columns: 260px 1fr 280px;
+  grid-template-columns: 260px minmax(0, 1fr) 280px;
   min-height: 0;
+  min-width: 0;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
 }
@@ -135,9 +196,10 @@ select:focus {
 }
 
 .panel-title {
-  font-size: var(--fs-xs);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semibold);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--tracking-caps);
   color: var(--text-faint);
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--border);
@@ -146,6 +208,15 @@ select:focus {
   justify-content: space-between;
   gap: var(--space-2);
   flex: none;
+  min-height: 30px;
+}
+/* The trailing half of a panel header is metadata, not a second title. */
+.panel-title > :last-child:not(:only-child) {
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: var(--fw-regular);
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
 }
 
 .panel-body {
@@ -157,7 +228,7 @@ select:focus {
 
 .empty {
   color: var(--text-faint);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-body);
   text-align: center;
   padding: var(--space-5) var(--space-3);
   line-height: 1.6;
@@ -168,17 +239,35 @@ select:focus {
 .toolbar {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 6px;
   padding: var(--space-2) var(--space-3);
   background: var(--bg-panel);
+  min-width: 0;
+  overflow: hidden;
+}
+/* Controls keep their size; only the project name gives ground. */
+.toolbar > button,
+.toolbar > select,
+.toolbar > .divider {
+  flex: none;
 }
 .toolbar .spacer {
   flex: 1;
+  min-width: var(--space-2);
 }
 .toolbar .title {
-  font-weight: 600;
-  font-size: var(--fs-lg);
-  margin-right: var(--space-3);
+  font-weight: var(--fw-semibold);
+  font-size: var(--fs-title);
+  letter-spacing: var(--tracking-tight);
+  margin-right: var(--space-2);
+  flex: 0 1 auto;
+  min-width: 40px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.toolbar button {
+  font-size: var(--fs-control);
 }
 .toolbar .dirty {
   color: var(--warn);
@@ -216,26 +305,29 @@ select:focus {
   background: var(--bg-input) center/cover no-repeat;
   display: grid;
   place-items: center;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--text-faint);
   overflow: hidden;
   flex: none;
 }
 .asset .name {
-  font-size: var(--fs-sm);
+  font-size: var(--fs-body);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .asset .meta {
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--text-faint);
   font-family: var(--font-mono);
 }
 
 /* --- Preview ------------------------------------------------------------- */
 
+/* Without flex:1 the preview collapses to its content height and the centre
+   column reads as empty — exactly what a wide window exposed. */
 .preview {
+  flex: 1;
   background: #000;
   display: grid;
   place-items: center;
@@ -244,58 +336,223 @@ select:focus {
   overflow: hidden;
 }
 .preview img {
-  max-width: 100%;
-  max-height: 100%;
+  width: 100%;
+  height: 100%;
+  /* contain on an explicitly sized box is the only form that cannot stretch;
+     max-width/max-height inside a grid item silently can. */
   object-fit: contain;
   display: block;
 }
 .preview .placeholder {
   color: var(--text-faint);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-body);
   text-align: center;
   line-height: 1.8;
 }
 .preview .badge {
   position: absolute;
-  bottom: var(--space-2);
-  right: var(--space-2);
-  background: rgba(0, 0, 0, 0.7);
+  background: rgba(0, 0, 0, 0.72);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 2px var(--space-2);
   font-family: var(--font-mono);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
   color: var(--text-muted);
 }
+/* Two badges, two corners — stacking them would let one hide the other. */
+.preview .badge.tc {
+  bottom: var(--space-2);
+  right: var(--space-2);
+}
 .preview .badge.busy {
+  top: var(--space-2);
+  right: var(--space-2);
   color: var(--accent);
+  border-color: var(--accent-dim);
+  font-family: var(--font);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semibold);
+}
+.preview .placeholder.error {
+  color: var(--danger);
+}
+.preview .placeholder .detail {
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+}
+
+/* --- Transport ----------------------------------------------------------- */
+
+.transport {
+  height: var(--transport-height);
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-3);
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.transport .timecode {
+  font-family: var(--font-mono);
+  font-size: var(--fs-transport);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tracking-tight);
+  color: var(--warn);
+  line-height: 1;
+}
+.transport .total {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+  line-height: 1;
+}
+.transport .keys {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.transport .spacer {
+  flex: 1;
+}
+.transport .format {
+  display: flex;
+  gap: var(--space-2);
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Icon buttons: square, quiet until touched. */
+.icon-btn {
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+}
+.icon-btn:hover:not(:disabled) {
+  background: var(--bg-raised);
+  border-color: var(--border);
+  color: var(--text);
+}
+.icon-btn svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+  fill: currentColor;
+}
+/* Icon + label share one button; the gap keeps them a pair, not two things. */
+.icon-btn.wide {
+  width: auto;
+  padding: 0 var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-control);
+  color: var(--text);
+  background: var(--bg-raised);
+  border-color: var(--border);
+}
+.icon-btn.wide svg {
+  color: var(--text-muted);
+}
+.icon-btn.wide:hover:not(:disabled) svg {
+  color: var(--text);
+}
+.transport .divider {
+  margin: 0 var(--space-1);
 }
 
 /* --- Inspector ----------------------------------------------------------- */
 
+/* Label left, value right with its unit — the value column is what you scan,
+   so it stays flush right and tabular across every row. */
 .field {
   display: grid;
-  grid-template-columns: 88px 1fr;
+  grid-template-columns: 1fr 88px;
   gap: var(--space-2);
   align-items: center;
-  margin-bottom: var(--space-2);
+  min-height: 26px;
 }
 .field label {
-  font-size: var(--fs-xs);
+  font-size: var(--fs-body);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.field input,
+.field select {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-body);
+  background: transparent;
+  border-color: transparent;
+  padding-right: var(--space-1);
+}
+.field input:hover,
+.field select:hover {
+  background: var(--bg-input);
+  border-color: var(--border);
+}
+.field input:focus,
+.field select:focus {
+  background: var(--bg-input);
+}
+/* Read-only facts share the value column but are not controls. */
+.field .readout {
+  text-align: right;
+  font-size: var(--fs-body);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.field .readout.mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
   color: var(--text-muted);
 }
+/* Unit rides with the field so the number stays flush against it. */
+.value-cell {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  justify-content: flex-end;
+}
+.value-cell input {
+  min-width: 0;
+}
+.field .unit {
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+  width: 20px;
+  flex: none;
+}
+
 .field-group {
   border-top: 1px solid var(--border);
   padding-top: var(--space-3);
   margin-top: var(--space-3);
 }
+/* More space above a group header than below it. */
 .field-group > h4 {
-  margin: 0 0 var(--space-2);
-  font-size: var(--fs-xs);
+  margin: 0 0 var(--space-1);
+  font-size: var(--fs-caption);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--tracking-caps);
   color: var(--text-faint);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 /* --- Timeline ------------------------------------------------------------ */
@@ -321,7 +578,7 @@ select:focus {
   align-items: center;
   padding: 0 var(--space-2);
   font-family: var(--font-mono);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--text-muted);
   flex: none;
 }
@@ -340,23 +597,33 @@ select:focus {
   align-items: center;
   gap: var(--space-1);
 }
+/* Track names are identifiers, not prose: caps + tracking keeps V1 / A1 scannable. */
 .track-header .label {
-  font-size: var(--fs-sm);
-  font-weight: 600;
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--text-muted);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.toggle {
-  font-size: var(--fs-xs);
-  padding: 1px var(--space-1);
-  min-width: 22px;
-  text-align: center;
+.track-header .count {
+  margin-left: auto;
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
 }
-.toggle.on {
-  background: var(--accent-dim);
-  border-color: var(--accent);
+/* A disabled track states it by going dim, not by lighting up. */
+.icon-btn.off {
+  color: var(--danger);
+  opacity: 0.85;
+}
+.track-header .add {
+  font-size: var(--fs-meta);
+  padding: 2px var(--space-2);
+  color: var(--text-muted);
 }
 
 .track-lanes {
@@ -383,7 +650,7 @@ select:focus {
   border-left: 1px solid var(--border);
   padding-left: 3px;
   font-family: var(--font-mono);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--text-faint);
   line-height: var(--ruler-height);
   pointer-events: none;
@@ -416,11 +683,27 @@ select:focus {
   padding: 3px var(--space-2);
   overflow: hidden;
   cursor: grab;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: #fff;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
+  /* Poster repeats along the clip: length reads as filmstrip, not as a bar. */
+  background-repeat: repeat-x;
+  background-size: auto 100%;
+  background-position: left center;
+}
+/* Scrim so the label survives any frame under it. */
+.clip.has-poster::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, rgba(10, 10, 14, 0.82) 0%, rgba(10, 10, 14, 0.15) 45%, rgba(10, 10, 14, 0.78) 100%);
+  pointer-events: none;
+}
+.clip.has-poster > .clip-name,
+.clip.has-poster > .clip-meta {
+  position: relative;
 }
 .clip.dragging {
   opacity: 0.6;
@@ -434,11 +717,14 @@ select:focus {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 .clip .clip-meta {
   font-family: var(--font-mono);
-  opacity: 0.75;
+  font-size: var(--fs-caption);
+  opacity: 0.8;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 .clip.video { background: var(--clip-video); }
 .clip.sequence { background: var(--clip-video); }
@@ -473,7 +759,7 @@ select:focus {
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-1) var(--space-3);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--text-muted);
   background: var(--bg-panel);
   border-top: 1px solid var(--border);
@@ -512,4 +798,368 @@ select:focus {
   background: var(--accent);
   transform-origin: left center;
   transition: transform 120ms linear;
+}
+
+/* --- Tabbed side panels -------------------------------------------------- */
+
+.panel.side {
+  min-width: 0;
+}
+.panel.side > .panel {
+  border-left: 0;
+  flex: 1;
+  min-height: 0;
+}
+/* Inside a tabbed side panel the tab already names the panel, so the panel's
+   own title bar carries only its metadata. */
+
+.tabs {
+  display: flex;
+  flex: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-app);
+}
+.tabs > button {
+  flex: 1;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  padding: var(--space-2) var(--space-1);
+  /* The indicator is a border that is always present, so selecting a tab
+     never shifts the row by a pixel. */
+  border-bottom: 2px solid transparent;
+}
+.tabs > button:hover {
+  background: var(--bg-raised);
+  color: var(--text-muted);
+}
+.tabs > button.on {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  background: var(--bg-panel);
+}
+
+.hint {
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+  line-height: 1.5;
+  margin: var(--space-1) 0 var(--space-2);
+}
+
+/* --- Effects panel ------------------------------------------------------- */
+
+.effects-search {
+  padding: var(--space-2);
+  flex: none;
+  border-bottom: 1px solid var(--border);
+}
+.effects-search input {
+  font-size: var(--fs-body);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  flex: none;
+  border-bottom: 1px solid var(--border);
+}
+.chip {
+  font-size: var(--fs-meta);
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: var(--bg-input);
+}
+.chip.on {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.effect-group > h4 {
+  margin: var(--space-3) 0 var(--space-1);
+  font-size: var(--fs-caption);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--text-faint);
+  font-weight: var(--fw-semibold);
+}
+.effect-group:first-child > h4 {
+  margin-top: 0;
+}
+
+.effect-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border-color: transparent;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-body);
+  cursor: grab;
+}
+.effect-item:hover:not(:disabled) {
+  background: var(--bg-raised);
+  border-color: var(--border);
+}
+.effect-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A one-letter badge, not a coloured dot: it has to survive greyscale. */
+.effect-kind {
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semibold);
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: var(--text);
+}
+.effect-kind.video { background: var(--clip-video); }
+.effect-kind.audio { background: var(--clip-audio); }
+
+/* --- Effect stack -------------------------------------------------------- */
+
+.effect-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-app);
+  padding: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.effect-card.bypassed {
+  opacity: 0.55;
+}
+.effect-card.missing {
+  border-color: var(--danger);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-meta);
+}
+.effect-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-bottom: var(--space-1);
+}
+.effect-title {
+  flex: 1;
+  font-size: var(--fs-body);
+  font-weight: var(--fw-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stack-remove {
+  width: 100%;
+  font-size: var(--fs-meta);
+  margin-top: var(--space-1);
+}
+
+/* A slider row keeps the same value column as every other field. */
+.field.slider {
+  grid-template-columns: 64px 1fr 52px;
+  gap: var(--space-2);
+}
+.field.slider .readout {
+  font-size: var(--fs-meta);
+}
+
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  padding: 0;
+  border: 0;
+  height: 18px;
+}
+input[type='range']::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border-strong);
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4.5px;
+  border-radius: 50%;
+  background: var(--text);
+  border: 1px solid var(--bg-app);
+}
+input[type='range']:hover::-webkit-slider-thumb {
+  background: var(--accent);
+}
+
+/* --- Audio mixer --------------------------------------------------------- */
+
+.mixer {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-end;
+  padding-top: var(--space-2);
+  overflow-x: auto;
+}
+.strip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-app);
+  min-width: 58px;
+}
+.strip.muted {
+  opacity: 0.55;
+}
+.strip-name {
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  max-width: 52px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.strip-db {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+/* Vertical fader. `writing-mode` on a range input collapses once appearance is
+   reset, so the track is rotated instead: a fixed-height well reserves the
+   space and the rotated control sits inside it. */
+.fader-well {
+  height: 130px;
+  width: 22px;
+  display: grid;
+  place-items: center;
+  position: relative;
+}
+.fader {
+  width: 126px;
+  height: 18px;
+  position: absolute;
+  transform: rotate(-90deg);
+  transform-origin: center;
+}
+
+/* --- Timeline toolbar ---------------------------------------------------- */
+
+.timeline-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.timeline-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  background: var(--bg-app);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+  min-height: 32px;
+}
+.tool-group {
+  display: flex;
+  gap: 2px;
+}
+.icon-btn.on {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--text);
+}
+.timeline-tools .spacer {
+  flex: 1;
+}
+.tool-hint {
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The cursor states which tool is armed, everywhere on the timeline. */
+.timeline.tool-razor .lane,
+.timeline.tool-razor .clip {
+  cursor: crosshair;
+}
+.timeline.tool-spacer .lane {
+  cursor: col-resize;
+}
+
+.track-header.locked {
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 6px,
+    rgba(255, 92, 92, 0.06) 6px,
+    rgba(255, 92, 92, 0.06) 12px
+  );
+}
+.lane.locked {
+  background: var(--bg-app);
+}
+.track-header.add-row {
+  justify-content: center;
+}
+
+/* Transition badge: a wedge on the clip's leading edge, sized to the overlap. */
+.clip-transition {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  background: linear-gradient(to right, rgba(240, 180, 0, 0.75), rgba(240, 180, 0, 0));
+  border-left: 2px solid var(--warn);
+  pointer-events: none;
+}
+
+.snap-line {
+  position: absolute;
+  top: var(--ruler-height);
+  bottom: 0;
+  width: 1px;
+  background: var(--ok);
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* Monitor tabs read as part of the picture pane, not as a third sidebar. */
+.tabs.monitors > button {
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+}
+.tabs.monitors {
+  background: var(--bg-panel);
+}
+.transport .scrub {
+  flex: 1;
+  min-width: 80px;
+}
+
+.mixer-body > .hint {
+  margin-top: 0;
 }

@@ -19,7 +19,7 @@ export function MediaPanel(props: Props) {
   return (
     <div className="panel">
       <div className="panel-title">
-        <span>Media · {props.assets.length}</span>
+        <span>{props.assets.length} file{props.assets.length === 1 ? '' : 's'}</span>
         <button onClick={props.onImport}>Import</button>
       </div>
       <div className="panel-body">

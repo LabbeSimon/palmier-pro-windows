@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { clipEndFrame, type Clip, type MediaAsset, type Timeline } from '../../core/model.js'
 import type { ClipProperties } from '../../core/ops.js'
 import { framesToTimecode } from '../../core/timecode.js'
+import { EffectStack } from './EffectStack.js'
 
 interface Props {
   timeline: Timeline
@@ -11,6 +12,12 @@ interface Props {
   onApply: (properties: ClipProperties) => void
   onUpdateText: (clipId: string, content: string) => void
   onSetTimelineSettings: (settings: { fps?: number; width?: number; height?: number; name?: string }) => void
+  onSetEffectParams: (clipId: string, effectId: string, params: Record<string, number>) => void
+  onToggleEffect: (clipId: string, effectId: string, enabled: boolean) => void
+  onRemoveEffect: (clipId: string, effectId: string) => void
+  onReorderEffect: (clipId: string, effectId: string, toIndex: number) => void
+  onSetTransition: (clipId: string, kind: string, durationFrames: number) => void
+  onRemoveTransition: (clipId: string) => void
 }
 
 /** Commits on blur or Enter so a half-typed value never reaches the domain layer. */
@@ -19,6 +26,8 @@ function NumberField(props: {
   value: number
   step?: number
   min?: number
+  /** Shown after the field — f, s, ×, °, dB. Keeps the number unambiguous. */
+  unit?: string
   onCommit: (value: number) => void
 }) {
   const [draft, setDraft] = useState(String(props.value))
@@ -35,19 +44,34 @@ function NumberField(props: {
 
   return (
     <div className="field">
+      <label title={props.label}>{props.label}</label>
+      <span className="value-cell">
+        <input
+          type="number"
+          step={props.step ?? 1}
+          min={props.min}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') event.currentTarget.blur()
+            if (event.key === 'Escape') setDraft(String(props.value))
+          }}
+        />
+        {props.unit ? <span className="unit">{props.unit}</span> : null}
+      </span>
+    </div>
+  )
+}
+
+/** A fact, not a control — same column, no input affordance. */
+function Readout(props: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="field">
       <label>{props.label}</label>
-      <input
-        type="number"
-        step={props.step ?? 1}
-        min={props.min}
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={commit}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') event.currentTarget.blur()
-          if (event.key === 'Escape') setDraft(String(props.value))
-        }}
-      />
+      <span className={`readout${props.mono ? ' mono' : ''}`} title={props.value}>
+        {props.value}
+      </span>
     </div>
   )
 }
@@ -59,8 +83,7 @@ export function Inspector(props: Props) {
   return (
     <div className="panel">
       <div className="panel-title">
-        <span>Inspector</span>
-        <span>{clips.length > 1 ? `${clips.length} clips` : clip ? clip.mediaType : 'timeline'}</span>
+        <span>{clips.length > 1 ? `${clips.length} clips selected` : clip ? clip.mediaType : 'timeline'}</span>
       </div>
       <div className="panel-body">
         {clips.length === 0 ? (
@@ -78,18 +101,21 @@ export function Inspector(props: Props) {
             </div>
             <NumberField
               label="Frame rate"
+              unit="fps"
               value={timeline.fps}
               min={1}
               onCommit={(fps) => props.onSetTimelineSettings({ fps: Math.round(fps) })}
             />
             <NumberField
               label="Width"
+              unit="px"
               value={timeline.width}
               min={2}
               onCommit={(width) => props.onSetTimelineSettings({ width: Math.round(width) })}
             />
             <NumberField
               label="Height"
+              unit="px"
               value={timeline.height}
               min={2}
               onCommit={(height) => props.onSetTimelineSettings({ height: Math.round(height) })}
@@ -100,18 +126,12 @@ export function Inspector(props: Props) {
           <>
             {clip ? (
               <>
-                <div className="field">
-                  <label>Source</label>
-                  <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {clip.textContent ?? props.assets.find((a) => a.id === clip.mediaRef)?.name ?? '—'}
-                  </span>
-                </div>
-                <div className="field">
-                  <label>Range</label>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-xs)', color: 'var(--text-muted)' }}>
-                    {framesToTimecode(clip.startFrame, timeline.fps)} → {framesToTimecode(clipEndFrame(clip), timeline.fps)}
-                  </span>
-                </div>
+                <Readout
+                  label="Source"
+                  value={clip.textContent ?? props.assets.find((a) => a.id === clip.mediaRef)?.name ?? '—'}
+                />
+                <Readout label="In" value={framesToTimecode(clip.startFrame, timeline.fps)} mono />
+                <Readout label="Out" value={framesToTimecode(clipEndFrame(clip), timeline.fps)} mono />
 
                 {clip.mediaType === 'text' ? (
                   <div className="field-group">
@@ -136,18 +156,21 @@ export function Inspector(props: Props) {
                 <>
                   <NumberField
                     label="Start frame"
+                    unit="f"
                     value={clip.startFrame}
                     min={0}
                     onCommit={(startFrame) => props.onApply({ startFrame: Math.round(startFrame) })}
                   />
                   <NumberField
                     label="Duration"
+                    unit="f"
                     value={clip.durationFrames}
                     min={1}
                     onCommit={(durationFrames) => props.onApply({ durationFrames: Math.round(durationFrames) })}
                   />
                   <NumberField
                     label="Trim head"
+                    unit="f"
                     value={clip.trimStartFrame}
                     min={0}
                     onCommit={(trimStartFrame) => props.onApply({ trimStartFrame: Math.round(trimStartFrame) })}
@@ -156,6 +179,7 @@ export function Inspector(props: Props) {
               ) : null}
               <NumberField
                 label="Speed"
+                unit="×"
                 value={clip?.speed ?? 1}
                 step={0.1}
                 min={0.05}
@@ -181,17 +205,32 @@ export function Inspector(props: Props) {
               />
               <NumberField
                 label="Fade in"
+                unit="f"
                 value={clip?.fadeInFrames ?? 0}
                 min={0}
                 onCommit={(fadeInFrames) => props.onApply({ fadeInFrames: Math.round(fadeInFrames) })}
               />
               <NumberField
                 label="Fade out"
+                unit="f"
                 value={clip?.fadeOutFrames ?? 0}
                 min={0}
                 onCommit={(fadeOutFrames) => props.onApply({ fadeOutFrames: Math.round(fadeOutFrames) })}
               />
             </div>
+
+            {clip ? (
+              <EffectStack
+                clip={clip}
+                timeline={timeline}
+                onSetParams={(effectId, params) => props.onSetEffectParams(clip.id, effectId, params)}
+                onToggle={(effectId, enabled) => props.onToggleEffect(clip.id, effectId, enabled)}
+                onRemove={(effectId) => props.onRemoveEffect(clip.id, effectId)}
+                onReorder={(effectId, toIndex) => props.onReorderEffect(clip.id, effectId, toIndex)}
+                onSetTransition={(kind, durationFrames) => props.onSetTransition(clip.id, kind, durationFrames)}
+                onRemoveTransition={() => props.onRemoveTransition(clip.id)}
+              />
+            ) : null}
 
             <div className="field-group">
               <h4>Transform</h4>
@@ -209,18 +248,21 @@ export function Inspector(props: Props) {
               />
               <NumberField
                 label="Scale X"
+                unit="×"
                 value={clip?.transform.scaleX ?? 1}
                 step={0.05}
                 onCommit={(scaleX) => props.onApply({ transform: { scaleX } })}
               />
               <NumberField
                 label="Scale Y"
+                unit="×"
                 value={clip?.transform.scaleY ?? 1}
                 step={0.05}
                 onCommit={(scaleY) => props.onApply({ transform: { scaleY } })}
               />
               <NumberField
                 label="Rotation"
+                unit="°"
                 value={clip?.transform.rotation ?? 0}
                 step={1}
                 onCommit={(rotation) => props.onApply({ transform: { rotation } })}

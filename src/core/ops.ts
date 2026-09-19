@@ -29,7 +29,17 @@ import {
   type TimelineMarker,
   type Track,
   type Transform,
+  type Transition,
+  type TransitionKind,
+  TRANSITION_KINDS,
 } from './model.js'
+import {
+  defaultParams,
+  EFFECTS_BY_ID,
+  type Effect,
+  type EffectDefinition,
+  type EffectParamSpec,
+} from './effects.js'
 import { secondsToFrames } from './timecode.js'
 
 export class OpError extends Error {
@@ -153,6 +163,13 @@ function sortClips(track: Track): void {
   track.clips.sort((a, b) => a.startFrame - b.startFrame)
 }
 
+/** A lock is only real if every mutation path consults it. */
+function refuseIfLocked(track: Track, what: string): void {
+  if (track.locked) {
+    throw new OpError('refused', `track "${track.name ?? track.type}" is locked; unlock it before ${what}`)
+  }
+}
+
 // --- Project / timeline lifecycle ----------------------------------------
 
 export function emptyTimeline(name: string, fps = 30, width = 1920, height = 1080): Timeline {
@@ -163,8 +180,8 @@ export function emptyTimeline(name: string, fps = 30, width = 1920, height = 108
     width,
     height,
     tracks: [
-      { id: newId(), type: 'video', name: 'V1', muted: false, hidden: false, clips: [] },
-      { id: newId(), type: 'audio', name: 'A1', muted: false, hidden: false, clips: [] },
+      { id: newId(), type: 'video', name: 'V1', muted: false, hidden: false, locked: false, volume: 1, clips: [] },
+      { id: newId(), type: 'audio', name: 'A1', muted: false, hidden: false, locked: false, volume: 1, clips: [] },
     ],
     markers: [],
   }
@@ -342,6 +359,8 @@ export function addTrack(project: Project, args: AddTrackArgs): MutationResult {
     name: args.name?.trim() || `${prefix}${sameType + 1}`,
     muted: false,
     hidden: false,
+    locked: false,
+    volume: 1,
     clips: [],
   }
 
@@ -368,6 +387,8 @@ export interface TrackFlagsArgs {
   trackId: string
   muted?: boolean
   hidden?: boolean
+  locked?: boolean
+  volume?: number
   name?: string
 }
 
@@ -388,6 +409,18 @@ export function setTrackFlags(project: Project, args: TrackFlagsArgs): MutationR
   if (args.hidden !== undefined && args.hidden !== track.hidden) {
     track.hidden = args.hidden
     changes.push(args.hidden ? 'hidden' : 'shown')
+  }
+  if (args.locked !== undefined && args.locked !== track.locked) {
+    track.locked = args.locked
+    changes.push(args.locked ? 'locked' : 'unlocked')
+  }
+  if (args.volume !== undefined) {
+    const volume = requireFinite(args.volume, 'volume')
+    if (volume < 0) throw new OpError('invalid_argument', 'volume must not be negative')
+    if (volume !== track.volume) {
+      track.volume = volume
+      changes.push(`gain -> ${volume}`)
+    }
   }
   if (args.name !== undefined) {
     const name = args.name.trim()
@@ -499,9 +532,10 @@ export function addClips(project: Project, args: AddClipsArgs): MutationResult {
           `${label}: ${asset.type} media cannot go on a ${found.type} track`,
         )
       }
+      refuseIfLocked(found, 'adding clips to it')
       track = found
     } else {
-      const found = timeline.tracks.find((t) => isCompatible(t.type, asset.type))
+      const found = timeline.tracks.find((t) => isCompatible(t.type, asset.type) && !t.locked)
       if (!found) {
         throw new OpError(
           'refused',
@@ -576,6 +610,8 @@ export function addClips(project: Project, args: AddClipsArgs): MutationResult {
       linkGroupId: null,
       textContent: null,
       textStyle: null,
+      effects: [],
+      transitionIn: null,
     }
 
     track.clips.push(clip)
@@ -681,6 +717,8 @@ export function addTexts(
       linkGroupId: null,
       textContent: spec.content,
       textStyle: { ...defaultTextStyle(), ...spec.style },
+      effects: [],
+      transitionIn: null,
     }
     track.clips.push(clip)
     sortClips(track)
@@ -762,6 +800,7 @@ export function removeClips(project: Project, args: RemoveClipsArgs): MutationRe
   for (const track of timeline.tracks) {
     const removed = track.clips.filter((c) => ids.has(c.id))
     if (removed.length === 0) continue
+    refuseIfLocked(track, 'deleting its clips')
     track.clips = track.clips.filter((c) => !ids.has(c.id))
     if (args.ripple) {
       // Shift later clips back by each gap, oldest gap first, so shifts compose.
@@ -825,6 +864,7 @@ export function splitClips(project: Project, args: SplitArgs): MutationResult {
 
   for (const loc of splittable) {
     const track = timeline.tracks.find((t) => t.id === loc.track.id)!
+    refuseIfLocked(track, 'splitting its clips')
     const clip = track.clips.find((c) => c.id === loc.clip.id)!
     const leftFrames = frame - clip.startFrame
     const rightFrames = clip.durationFrames - leftFrames
@@ -899,6 +939,8 @@ export function moveClips(
       }
       destination = found
     }
+    refuseIfLocked(loc.track, 'moving its clips')
+    refuseIfLocked(destination, 'moving clips onto it')
 
     const blocker = overlapping(destination, startFrame, startFrame + loc.clip.durationFrames, movingIds)
     if (blocker) {
@@ -965,6 +1007,7 @@ export function setClipProperties(
 
   for (const id of args.clipIds) {
     const loc = requireClip(timeline, id)
+    refuseIfLocked(loc.track, 'changing its clips')
     const clip = loc.clip
     const before = JSON.stringify(clip)
 
@@ -1177,4 +1220,429 @@ export function removeAssets(project: Project, assetIds: string[]): MutationResu
 function touch(project: Project): Project {
   project.modifiedAt = new Date().toISOString()
   return project
+}
+
+// --- Effects --------------------------------------------------------------
+
+/** Clamps a parameter to its declared bounds and rejects anything non-finite. */
+function coerceEffectParam(spec: EffectParamSpec, raw: unknown, label: string): number {
+  const value = requireFinite(raw, label)
+  if (value < spec.min || value > spec.max) {
+    throw new OpError(
+      'invalid_argument',
+      `${label} must be between ${spec.min} and ${spec.max}, got ${value}`,
+    )
+  }
+  return value
+}
+
+function buildParams(
+  definition: EffectDefinition,
+  supplied: Record<string, unknown> | undefined,
+  label: string,
+): Record<string, number> {
+  const params = defaultParams(definition)
+  if (!supplied) return params
+  for (const [key, raw] of Object.entries(supplied)) {
+    const spec = definition.params.find((p) => p.key === key)
+    if (!spec) {
+      throw new OpError(
+        'invalid_argument',
+        `${label}: "${definition.name}" has no parameter "${key}" (has ${definition.params.map((p) => p.key).join(', ') || 'none'})`,
+      )
+    }
+    params[key] = coerceEffectParam(spec, raw, `${label}.${key}`)
+  }
+  return params
+}
+
+export interface AddEffectArgs {
+  timelineId?: string
+  clipIds: string[]
+  definitionId: string
+  params?: Record<string, unknown>
+  /** Stack position; appended when omitted. */
+  index?: number
+}
+
+export function addEffect(project: Project, args: AddEffectArgs): MutationResult {
+  if (!Array.isArray(args.clipIds) || args.clipIds.length === 0) {
+    throw new OpError('invalid_argument', 'clipIds must be a non-empty array')
+  }
+  const definition = EFFECTS_BY_ID.get(args.definitionId)
+  if (!definition) {
+    throw new OpError('not_found', `no effect named "${args.definitionId}"`)
+  }
+  const target = requireTimeline(project, args.timelineId)
+  for (const id of args.clipIds) requireClip(target, id)
+
+  const next = clone(project)
+  const timeline = next.timelines.find((t) => t.id === target.id)!
+  const created: string[] = []
+  const warnings: string[] = []
+
+  for (const id of args.clipIds) {
+    const loc = requireClip(timeline, id)
+    refuseIfLocked(loc.track, 'adding effects to its clips')
+    const clip = loc.clip
+
+    // An audio effect on a silent clip would render nothing; say so rather than pretend.
+    if (definition.kind === 'audio' && !clipCarriesAudio(next, clip)) {
+      warnings.push(`clip ${id} has no audio, so "${definition.name}" will have no effect`)
+    }
+    if (definition.kind === 'video' && clip.mediaType === 'audio') {
+      throw new OpError('refused', `"${definition.name}" is a video effect; clip ${id} is audio`)
+    }
+
+    const effect: Effect = {
+      id: newId(),
+      definitionId: definition.id,
+      enabled: true,
+      params: buildParams(definition, args.params, 'params'),
+    }
+    clip.effects ??= []
+    const index = args.index === undefined ? clip.effects.length : Math.min(Math.max(0, Math.round(args.index)), clip.effects.length)
+    clip.effects.splice(index, 0, effect)
+    created.push(effect.id)
+  }
+
+  return {
+    project: touch(next),
+    receipt: {
+      operation: 'add_effect',
+      changed: true,
+      summary: `Added "${definition.name}" to ${args.clipIds.length} clip(s)`,
+      affectedIds: created,
+      warnings,
+    },
+  }
+}
+
+function clipCarriesAudio(project: Project, clip: Clip): boolean {
+  if (clip.mediaType === 'audio') return true
+  const asset = project.assets.find((a) => a.id === clip.mediaRef)
+  return Boolean(asset?.hasAudio)
+}
+
+function requireEffect(clip: Clip, effectId: string): { effect: Effect; index: number } {
+  const index = (clip.effects ?? []).findIndex((e) => e.id === effectId)
+  if (index < 0) throw new OpError('not_found', `clip ${clip.id} has no effect ${effectId}`)
+  return { effect: clip.effects[index]!, index }
+}
+
+export function removeEffect(
+  project: Project,
+  args: { timelineId?: string; clipId: string; effectId: string },
+): MutationResult {
+  const target = requireTimeline(project, args.timelineId)
+  requireClip(target, args.clipId)
+
+  const next = clone(project)
+  const timeline = next.timelines.find((t) => t.id === target.id)!
+  const loc = requireClip(timeline, args.clipId)
+  refuseIfLocked(loc.track, 'removing effects from its clips')
+  const { effect, index } = requireEffect(loc.clip, args.effectId)
+  const definition = EFFECTS_BY_ID.get(effect.definitionId)
+  loc.clip.effects.splice(index, 1)
+
+  return {
+    project: touch(next),
+    receipt: {
+      operation: 'remove_effect',
+      changed: true,
+      summary: `Removed "${definition?.name ?? effect.definitionId}" from clip ${args.clipId}`,
+      affectedIds: [args.effectId],
+      warnings: [],
+    },
+  }
+}
+
+export function setEffectParams(
+  project: Project,
+  args: {
+    timelineId?: string
+    clipId: string
+    effectId: string
+    params?: Record<string, unknown>
+    enabled?: boolean
+  },
+): MutationResult {
+  const target = requireTimeline(project, args.timelineId)
+  requireClip(target, args.clipId)
+
+  const next = clone(project)
+  const timeline = next.timelines.find((t) => t.id === target.id)!
+  const loc = requireClip(timeline, args.clipId)
+  refuseIfLocked(loc.track, 'changing effects on its clips')
+  const { effect } = requireEffect(loc.clip, args.effectId)
+  const definition = EFFECTS_BY_ID.get(effect.definitionId)
+  if (!definition) throw new OpError('not_found', `unknown effect "${effect.definitionId}"`)
+
+  const before = JSON.stringify(effect)
+  if (args.params) {
+    for (const [key, raw] of Object.entries(args.params)) {
+      const spec = definition.params.find((p) => p.key === key)
+      if (!spec) {
+        throw new OpError(
+          'invalid_argument',
+          `"${definition.name}" has no parameter "${key}" (has ${definition.params.map((p) => p.key).join(', ') || 'none'})`,
+        )
+      }
+      effect.params[key] = coerceEffectParam(spec, raw, `params.${key}`)
+    }
+  }
+  if (args.enabled !== undefined) {
+    if (typeof args.enabled !== 'boolean') throw new OpError('invalid_argument', 'enabled must be a boolean')
+    effect.enabled = args.enabled
+  }
+
+  const changed = JSON.stringify(effect) !== before
+  return {
+    project: changed ? touch(next) : project,
+    receipt: {
+      operation: 'set_effect_params',
+      changed,
+      summary: changed
+        ? `Updated "${definition.name}" on clip ${args.clipId}`
+        : `"${definition.name}" already matched the request`,
+      affectedIds: [args.effectId],
+      warnings: [],
+    },
+  }
+}
+
+export function reorderEffect(
+  project: Project,
+  args: { timelineId?: string; clipId: string; effectId: string; toIndex: number },
+): MutationResult {
+  const target = requireTimeline(project, args.timelineId)
+  requireClip(target, args.clipId)
+
+  const next = clone(project)
+  const timeline = next.timelines.find((t) => t.id === target.id)!
+  const loc = requireClip(timeline, args.clipId)
+  refuseIfLocked(loc.track, 'reordering effects on its clips')
+  const { index } = requireEffect(loc.clip, args.effectId)
+  const stack = loc.clip.effects
+  const to = Math.min(Math.max(0, Math.round(args.toIndex)), stack.length - 1)
+
+  if (to === index) {
+    return {
+      project,
+      receipt: {
+        operation: 'reorder_effect',
+        changed: false,
+        summary: `Effect is already at position ${to}`,
+        affectedIds: [args.effectId],
+        warnings: [],
+      },
+    }
+  }
+  const [moved] = stack.splice(index, 1)
+  stack.splice(to, 0, moved!)
+
+  return {
+    project: touch(next),
+    receipt: {
+      operation: 'reorder_effect',
+      changed: true,
+      summary: `Moved effect from position ${index} to ${to}`,
+      affectedIds: [args.effectId],
+      warnings: [],
+    },
+  }
+}
+
+// --- Transitions ----------------------------------------------------------
+
+/**
+ * A transition needs a neighbour to dissolve from and enough material on both
+ * sides to cover the overlap. Refusing beats silently shortening the handle.
+ */
+export function addTransition(
+  project: Project,
+  args: { timelineId?: string; clipId: string; kind?: TransitionKind; durationFrames?: number },
+): MutationResult {
+  const target = requireTimeline(project, args.timelineId)
+  requireClip(target, args.clipId)
+
+  const kind = (args.kind ?? 'dissolve') as TransitionKind
+  if (!TRANSITION_KINDS.includes(kind)) {
+    throw new OpError('invalid_argument', `kind must be one of ${TRANSITION_KINDS.join(', ')}`)
+  }
+
+  const next = clone(project)
+  const timeline = next.timelines.find((t) => t.id === target.id)!
+  const loc = requireClip(timeline, args.clipId)
+  refuseIfLocked(loc.track, 'adding a transition on it')
+
+  const sorted = [...loc.track.clips].sort((a, b) => a.startFrame - b.startFrame)
+  const position = sorted.findIndex((c) => c.id === args.clipId)
+  const previous = position > 0 ? sorted[position - 1]! : null
+  if (!previous) {
+    throw new OpError('refused', `clip ${args.clipId} is first on its track; there is nothing to transition from`)
+  }
+  if (clipEndFrame(previous) !== loc.clip.startFrame) {
+    throw new OpError(
+      'refused',
+      `clip ${args.clipId} does not butt against its predecessor; close the gap first`,
+    )
+  }
+
+  const durationFrames =
+    args.durationFrames === undefined
+      ? Math.min(timeline.fps, previous.durationFrames, loc.clip.durationFrames)
+      : requireDuration(args.durationFrames, 'durationFrames')
+
+  const longest = Math.min(previous.durationFrames, loc.clip.durationFrames)
+  if (durationFrames > longest) {
+    throw new OpError(
+      'refused',
+      `a ${durationFrames}-frame transition needs ${durationFrames} frames on both sides, but the shorter clip is ${longest}`,
+    )
+  }
+  // The incoming clip is pulled back over its predecessor using its own head
+  // handle, so that handle has to exist. Refusing beats a silent short overlap.
+  if (loc.clip.trimStartFrame < durationFrames) {
+    throw new OpError(
+      'refused',
+      `a ${durationFrames}-frame transition needs ${durationFrames} frames of head handle on clip ${args.clipId}, but only ${loc.clip.trimStartFrame} are trimmed off its start`,
+    )
+  }
+
+  loc.clip.transitionIn = { id: newId(), kind, durationFrames }
+
+  return {
+    project: touch(next),
+    receipt: {
+      operation: 'add_transition',
+      changed: true,
+      summary: `Added a ${durationFrames}-frame ${kind} into clip ${args.clipId}`,
+      affectedIds: [loc.clip.transitionIn.id],
+      warnings: [],
+    },
+  }
+}
+
+export function removeTransition(
+  project: Project,
+  args: { timelineId?: string; clipId: string },
+): MutationResult {
+  const target = requireTimeline(project, args.timelineId)
+  requireClip(target, args.clipId)
+
+  const next = clone(project)
+  const timeline = next.timelines.find((t) => t.id === target.id)!
+  const loc = requireClip(timeline, args.clipId)
+  refuseIfLocked(loc.track, 'removing a transition on it')
+
+  if (!loc.clip.transitionIn) {
+    return {
+      project,
+      receipt: {
+        operation: 'remove_transition',
+        changed: false,
+        summary: `Clip ${args.clipId} has no transition`,
+        affectedIds: [],
+        warnings: [],
+      },
+    }
+  }
+  const removed = loc.clip.transitionIn
+  loc.clip.transitionIn = null
+
+  return {
+    project: touch(next),
+    receipt: {
+      operation: 'remove_transition',
+      changed: true,
+      summary: `Removed the ${removed.kind} from clip ${args.clipId}`,
+      affectedIds: [removed.id],
+      warnings: [],
+    },
+  }
+}
+
+/**
+ * Spacer: shifts every clip that starts at or after `fromFrame` on one track.
+ * A negative delta closes a gap and is refused if it would make clips collide
+ * or push anything before frame zero — the gesture reports instead of eating
+ * material.
+ */
+export function shiftClips(
+  project: Project,
+  args: { timelineId?: string; trackId: string; fromFrame: number; deltaFrames: number },
+): MutationResult {
+  const fromFrame = requireFrame(args.fromFrame, 'fromFrame')
+  const delta = Math.round(requireFinite(args.deltaFrames, 'deltaFrames'))
+  const target = requireTimeline(project, args.timelineId)
+  const existing = target.tracks.find((t) => t.id === args.trackId)
+  if (!existing) throw new OpError('not_found', `track ${args.trackId} is not on timeline ${target.id}`)
+  refuseIfLocked(existing, 'shifting its clips')
+
+  if (delta === 0) {
+    return {
+      project,
+      receipt: {
+        operation: 'shift_clips',
+        changed: false,
+        summary: 'Nothing to shift',
+        affectedIds: [],
+        warnings: [],
+      },
+    }
+  }
+
+  const moving = existing.clips.filter((c) => c.startFrame >= fromFrame)
+  if (moving.length === 0) {
+    return {
+      project,
+      receipt: {
+        operation: 'shift_clips',
+        changed: false,
+        summary: `No clip starts at or after frame ${fromFrame}`,
+        affectedIds: [],
+        warnings: [],
+      },
+    }
+  }
+
+  const earliest = Math.min(...moving.map((c) => c.startFrame))
+  if (earliest + delta < 0) {
+    throw new OpError('refused', `shifting by ${delta} would push a clip before frame zero`)
+  }
+
+  // Closing a gap must not overrun whatever sits before the shifted block.
+  const stationary = existing.clips.filter((c) => c.startFrame < fromFrame)
+  if (delta < 0 && stationary.length > 0) {
+    const wall = Math.max(...stationary.map((c) => clipEndFrame(c)))
+    if (earliest + delta < wall) {
+      throw new OpError(
+        'refused',
+        `shifting by ${delta} would overlap the clip ending at frame ${wall}; the most you can close is ${earliest - wall}`,
+      )
+    }
+  }
+
+  const next = clone(project)
+  const timeline = next.timelines.find((t) => t.id === target.id)!
+  const track = timeline.tracks.find((t) => t.id === args.trackId)!
+  const ids: string[] = []
+  for (const clip of track.clips) {
+    if (clip.startFrame < fromFrame) continue
+    clip.startFrame += delta
+    ids.push(clip.id)
+  }
+  sortClips(track)
+
+  return {
+    project: touch(next),
+    receipt: {
+      operation: 'shift_clips',
+      changed: true,
+      summary: `Shifted ${ids.length} clip(s) by ${delta} frame(s) on "${track.name ?? track.type}"`,
+      affectedIds: ids,
+      warnings: [],
+    },
+  }
 }

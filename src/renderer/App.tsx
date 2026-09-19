@@ -2,13 +2,19 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { timelineTotalFrames, type Clip } from '../core/model.js'
 import type { ClipProperties } from '../core/ops.js'
+import type { MenuCommand } from '../main/menu.js'
+import { AudioMixer } from './components/AudioMixer.js'
+import { EffectsPanel } from './components/EffectsPanel.js'
 import { Inspector } from './components/Inspector.js'
 import { MediaPanel } from './components/MediaPanel.js'
-import { Preview } from './components/Preview.js'
+import { Monitors } from './components/Monitors.js'
 import { StatusBar } from './components/StatusBar.js'
-import { TimelineView } from './components/TimelineView.js'
+import { TimelineView, type TimelineTool } from './components/TimelineView.js'
 import { Toolbar } from './components/Toolbar.js'
 import { useEditor, usePreviewFrame } from './state.js'
+
+type LeftTab = 'media' | 'effects'
+type RightTab = 'inspector' | 'mixer'
 
 export function App() {
   const { state, run, setStatus, setExportProgress } = useEditor()
@@ -17,6 +23,10 @@ export function App() {
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null)
   const [pixelsPerFrame, setPixelsPerFrame] = useState(2)
   const [exporting, setExporting] = useState(false)
+  const [tool, setTool] = useState<TimelineTool>('select')
+  const [snapEnabled, setSnapEnabled] = useState(true)
+  const [leftTab, setLeftTab] = useState<LeftTab>('media')
+  const [rightTab, setRightTab] = useState<RightTab>('inspector')
 
   const { project, timeline } = state
   const timelineId = timeline?.id
@@ -27,7 +37,7 @@ export function App() {
     return timeline.tracks.flatMap((track) => track.clips.filter((clip) => ids.has(clip.id)))
   }, [timeline, selectedClipIds])
 
-  // A selection can be invalidated by an agent edit arriving over MCP.
+  // An agent editing over MCP can delete a clip the UI still has selected.
   useEffect(() => {
     if (selectedClipIds.length === 0 || !timeline) return
     const alive = new Set(timeline.tracks.flatMap((t) => t.clips.map((c) => c.id)))
@@ -36,7 +46,8 @@ export function App() {
   }, [timeline, selectedClipIds])
 
   const totalFrames = timeline ? timelineTotalFrames(timeline) : 0
-  const preview = usePreviewFrame(project, Math.min(playhead, Math.max(0, totalFrames - 1)), totalFrames > 0)
+  const clampedPlayhead = Math.min(playhead, Math.max(0, totalFrames - 1))
+  const preview = usePreviewFrame(project, clampedPlayhead, totalFrames > 0)
 
   // --- Actions ------------------------------------------------------------
 
@@ -71,6 +82,28 @@ export function App() {
     )
   }, [run, timeline, timelineId, playhead])
 
+  const addMarkerAtPlayhead = useCallback(() => {
+    if (!timeline) return
+    void run(() =>
+      window.palmier.ops.addMarkers({
+        timelineId,
+        markers: [{ startFrame: playhead, name: `Marker ${timeline.markers.length + 1}` }],
+      }),
+    )
+  }, [run, timeline, timelineId, playhead])
+
+  const addEffect = useCallback(
+    (definitionId: string, clipIds?: string[]) => {
+      const targets = clipIds ?? selectedClipIds
+      if (targets.length === 0) {
+        setStatus({ text: 'Select a clip first', tone: 'error' })
+        return
+      }
+      void run(() => window.palmier.ops.addEffect({ timelineId, clipIds: targets, definitionId }))
+    },
+    [run, selectedClipIds, timelineId, setStatus],
+  )
+
   const exportVideo = useCallback(async () => {
     setExporting(true)
     setStatus({ text: 'Export started…', tone: 'info' })
@@ -89,33 +122,70 @@ export function App() {
     void window.palmier.system.reveal(result.value.outputPath)
   }, [setStatus, setExportProgress])
 
-  // --- Keyboard -----------------------------------------------------------
+  const selectAll = useCallback(() => {
+    if (!timeline) return
+    setSelectedClipIds(timeline.tracks.flatMap((t) => t.clips.map((c) => c.id)))
+  }, [timeline])
+
+  // --- Menu: the native menu and its accelerators reuse these same handlers.
+
+  useEffect(() => {
+    const off = window.palmier.menu.onCommand((command: MenuCommand) => {
+      switch (command) {
+        case 'project:new': void run(() => window.palmier.project.create()); break
+        case 'project:open': void run(() => window.palmier.project.open()); break
+        case 'project:save': void run(() => window.palmier.project.save(false)); break
+        case 'project:saveAs': void run(() => window.palmier.project.save(true)); break
+        case 'project:export': void exportVideo(); break
+        case 'edit:undo': void run(() => window.palmier.project.undo()); break
+        case 'edit:redo': void run(() => window.palmier.project.redo()); break
+        case 'edit:selectAll': selectAll(); break
+        case 'edit:deselect': setSelectedClipIds([]); break
+        case 'edit:delete': deleteSelection(false); break
+        case 'edit:rippleDelete': deleteSelection(true); break
+        case 'media:import': void run(() => window.palmier.media.import()); break
+        case 'timeline:split': splitAtPlayhead(); break
+        case 'timeline:addText': addTextAtPlayhead(); break
+        case 'timeline:addMarker': addMarkerAtPlayhead(); break
+        case 'timeline:addVideoTrack': void run(() => window.palmier.ops.addTrack({ timelineId, type: 'video' })); break
+        case 'timeline:addAudioTrack': void run(() => window.palmier.ops.addTrack({ timelineId, type: 'audio' })); break
+        case 'timeline:toggleSnap': setSnapEnabled((on) => !on); break
+        case 'timeline:zoomIn': setPixelsPerFrame((z) => Math.min(40, z * 1.5)); break
+        case 'timeline:zoomOut': setPixelsPerFrame((z) => Math.max(0.02, z / 1.5)); break
+        case 'timeline:zoomFit': setPixelsPerFrame(totalFrames > 0 ? Math.max(0.02, 1200 / totalFrames) : 2); break
+        case 'tool:select': setTool('select'); break
+        case 'tool:razor': setTool('razor'); break
+        case 'tool:spacer': setTool('spacer'); break
+        case 'view:effects': setLeftTab('effects'); break
+        case 'view:mixer': setRightTab('mixer'); break
+        case 'view:inspector': setRightTab('inspector'); break
+        case 'playhead:start': setPlayhead(0); break
+        case 'playhead:end': setPlayhead(Math.max(0, totalFrames - 1)); break
+        case 'help:mcp':
+          setStatus({
+            text: state.mcp.endpoint
+              ? `Point your agent at ${state.mcp.endpoint} — 30 tools available`
+              : 'The MCP server is not running',
+            tone: state.mcp.running ? 'ok' : 'error',
+          })
+          break
+      }
+    })
+    return off
+  }, [
+    run, exportVideo, selectAll, deleteSelection, splitAtPlayhead, addTextAtPlayhead,
+    addMarkerAtPlayhead, timelineId, totalFrames, state.mcp, setStatus,
+  ])
+
+  // --- Keyboard: only what the menu does not already own. ------------------
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement
       if (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.isContentEditable) return
+      if (event.ctrlKey || event.metaKey || event.altKey) return
 
-      if (event.ctrlKey && event.key.toLowerCase() === 'z') {
-        event.preventDefault()
-        void run(() => (event.shiftKey ? window.palmier.project.redo() : window.palmier.project.undo()))
-        return
-      }
-      if (event.ctrlKey && event.key.toLowerCase() === 's') {
-        event.preventDefault()
-        void run(() => window.palmier.project.save(false))
-        return
-      }
       switch (event.key) {
-        case 's':
-        case 'S':
-          splitAtPlayhead()
-          break
-        case 'Delete':
-        case 'Backspace':
-          event.preventDefault()
-          deleteSelection(event.shiftKey)
-          break
         case 'ArrowLeft':
           event.preventDefault()
           setPlayhead((f) => Math.max(0, f - (event.shiftKey ? 10 : 1)))
@@ -124,20 +194,11 @@ export function App() {
           event.preventDefault()
           setPlayhead((f) => Math.min(Math.max(0, totalFrames - 1), f + (event.shiftKey ? 10 : 1)))
           break
-        case 'Home':
-          setPlayhead(0)
-          break
-        case 'End':
-          setPlayhead(Math.max(0, totalFrames - 1))
-          break
-        case 'Escape':
-          setSelectedClipIds([])
-          break
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [run, splitAtPlayhead, deleteSelection, totalFrames])
+  }, [totalFrames])
 
   if (!project || !timeline) {
     return <div className="empty">Loading project…</div>
@@ -174,52 +235,149 @@ export function App() {
       />
 
       <div className="workspace">
-        <MediaPanel
-          assets={project.assets}
-          thumbnails={state.thumbnails}
-          selectedAssetId={selectedAssetId}
-          onSelect={setSelectedAssetId}
-          onImport={() => void run(() => window.palmier.media.import())}
-          onRemove={(assetId) => void run(() => window.palmier.ops.removeAssets({ assetIds: [assetId] }))}
-        />
+        <div className="panel side">
+          <div className="tabs" role="tablist">
+            <button
+              role="tab"
+              aria-selected={leftTab === 'media'}
+              className={leftTab === 'media' ? 'on' : ''}
+              onClick={() => setLeftTab('media')}
+            >
+              Project bin
+            </button>
+            <button
+              role="tab"
+              aria-selected={leftTab === 'effects'}
+              className={leftTab === 'effects' ? 'on' : ''}
+              onClick={() => setLeftTab('effects')}
+            >
+              Effects
+            </button>
+          </div>
 
-        <Preview
+          {leftTab === 'media' ? (
+            <MediaPanel
+              assets={project.assets}
+              thumbnails={state.thumbnails}
+              selectedAssetId={selectedAssetId}
+              onSelect={setSelectedAssetId}
+              onImport={() => void run(() => window.palmier.media.import())}
+              onRemove={(assetId) => void run(() => window.palmier.ops.removeAssets({ assetIds: [assetId] }))}
+            />
+          ) : (
+            <EffectsPanel selectionCount={selectedClipIds.length} onAdd={(id) => addEffect(id)} />
+          )}
+        </div>
+
+        <Monitors
           timeline={timeline}
-          frame={Math.min(playhead, Math.max(0, totalFrames - 1))}
+          frame={clampedPlayhead}
+          totalFrames={totalFrames}
           image={preview.image}
           busy={preview.busy}
           error={preview.error}
           empty={totalFrames === 0}
+          clipAsset={project.assets.find((a) => a.id === selectedAssetId) ?? null}
+          onSeek={setPlayhead}
+          onSplit={splitAtPlayhead}
         />
 
-        <Inspector
-          timeline={timeline}
-          clips={selectedClips}
-          assets={project.assets}
-          onApply={applyToSelection}
-          onUpdateText={(clipId, content) =>
-            void run(() => window.palmier.ops.updateText({ timelineId, clipId, content }))
-          }
-          onSetTimelineSettings={(settings) =>
-            void run(() => window.palmier.ops.setProjectSettings({ timelineId, ...settings }))
-          }
-        />
+        <div className="panel side">
+          <div className="tabs" role="tablist">
+            <button
+              role="tab"
+              aria-selected={rightTab === 'inspector'}
+              className={rightTab === 'inspector' ? 'on' : ''}
+              onClick={() => setRightTab('inspector')}
+            >
+              Inspector
+            </button>
+            <button
+              role="tab"
+              aria-selected={rightTab === 'mixer'}
+              className={rightTab === 'mixer' ? 'on' : ''}
+              onClick={() => setRightTab('mixer')}
+            >
+              Mixer
+            </button>
+          </div>
+
+          {rightTab === 'inspector' ? (
+            <Inspector
+              timeline={timeline}
+              clips={selectedClips}
+              assets={project.assets}
+              onApply={applyToSelection}
+              onUpdateText={(clipId, content) =>
+                void run(() => window.palmier.ops.updateText({ timelineId, clipId, content }))
+              }
+              onSetTimelineSettings={(settings) =>
+                void run(() => window.palmier.ops.setProjectSettings({ timelineId, ...settings }))
+              }
+              onSetEffectParams={(clipId, effectId, params) =>
+                void run(() => window.palmier.ops.setEffectParams({ timelineId, clipId, effectId, params }))
+              }
+              onToggleEffect={(clipId, effectId, enabled) =>
+                void run(() => window.palmier.ops.setEffectParams({ timelineId, clipId, effectId, enabled }))
+              }
+              onRemoveEffect={(clipId, effectId) =>
+                void run(() => window.palmier.ops.removeEffect({ timelineId, clipId, effectId }))
+              }
+              onReorderEffect={(clipId, effectId, toIndex) =>
+                void run(() => window.palmier.ops.reorderEffect({ timelineId, clipId, effectId, toIndex }))
+              }
+              onSetTransition={(clipId, kind, durationFrames) =>
+                void run(() => window.palmier.ops.addTransition({ timelineId, clipId, kind, durationFrames }))
+              }
+              onRemoveTransition={(clipId) =>
+                void run(() => window.palmier.ops.removeTransition({ timelineId, clipId }))
+              }
+            />
+          ) : (
+            <div className="panel">
+              <div className="panel-title">
+                <span>{timeline.tracks.length} tracks</span>
+              </div>
+              <div className="panel-body">
+                <AudioMixer
+                  timeline={timeline}
+                  onSetGain={(trackId, volume) =>
+                    void run(() => window.palmier.ops.setTrackFlags({ timelineId, trackId, volume }))
+                  }
+                  onToggleMute={(trackId, muted) =>
+                    void run(() => window.palmier.ops.setTrackFlags({ timelineId, trackId, muted }))
+                  }
+                />
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       <TimelineView
         timeline={timeline}
         assets={project.assets}
+        thumbnails={state.thumbnails}
         playhead={playhead}
         selectedClipIds={selectedClipIds}
         pixelsPerFrame={pixelsPerFrame}
+        tool={tool}
+        snapEnabled={snapEnabled}
         onScrub={setPlayhead}
         onSelect={setSelectedClipIds}
         onZoom={setPixelsPerFrame}
+        onSetTool={setTool}
+        onToggleSnap={() => setSnapEnabled((on) => !on)}
         onMoveClip={(clipId, startFrame, trackId) =>
           void run(() => window.palmier.ops.moveClips({ timelineId, moves: [{ clipId, startFrame, trackId }] }))
         }
         onDropAsset={(assetId, trackId, startFrame) =>
           void run(() => window.palmier.ops.addClips({ timelineId, clips: [{ assetId, trackId, startFrame }] }))
+        }
+        onDropEffect={(definitionId, clipId) => addEffect(definitionId, [clipId])}
+        onRazor={(_trackId, frame) => void run(() => window.palmier.ops.splitClips({ timelineId, frame }))}
+        onSpacer={(trackId, fromFrame, deltaFrames) =>
+          void run(() => window.palmier.ops.shiftClips({ timelineId, trackId, fromFrame, deltaFrames }))
         }
         onToggleTrack={(trackId, field) => {
           const track = timeline.tracks.find((t) => t.id === trackId)

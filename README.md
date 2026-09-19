@@ -4,18 +4,33 @@ An AI-native video editor for Windows. Agents edit the timeline directly over MC
 same timeline you see and drag clips on, with the same validation, the same undo history,
 and honest receipts when an edit is refused.
 
-Inspired by [palmier-pro](https://github.com/palmier-io/palmier-pro), a macOS editor built
-on Swift, SwiftUI, AVFoundation, Metal and Core Image. None of those frameworks exist on
-Windows, so this is an independent implementation of the idea rather than a port: TypeScript,
-Electron and FFmpeg. No upstream code is reused, which is why this project is Apache-2.0
-rather than inheriting the original's GPLv3.
+Two lineages meet here. The agent-first idea comes from
+[palmier-pro](https://github.com/palmier-io/palmier-pro), a macOS editor built on Swift,
+SwiftUI, AVFoundation, Metal and Core Image. The working shape of the editor — menu bar,
+project bin, dual monitors, effect stack, audio mixer, razor and spacer tools — follows
+[Kdenlive](https://kdenlive.org), because that is the vocabulary editors already know.
+
+Neither is ported. None of Apple's frameworks exist on Windows and no upstream code from
+either project is reused, which is why this is Apache-2.0 rather than inheriting a copyleft
+licence: TypeScript, Electron and FFmpeg, written from scratch.
 
 ## What works
 
 - **Timeline editing** — multi-track video, audio and text; trim, retime, split, ripple
   delete, move across tracks, fades, opacity, transform, crop.
-- **MCP server** on `http://127.0.0.1:19789/mcp`, 21 tools, bound to loopback only.
-- **Preview** — every frame is composited by FFmpeg, so what you see is what exports.
+- **Tools** — selection, razor and spacer, with snapping to clip edges, markers and the
+  playhead.
+- **21 effects** in five categories (colour, blur/sharpen, distort, stylize, audio), each a
+  stack entry that can be reordered, bypassed or removed.
+- **11 transitions** — dissolve, fades through black and white, four wipes, two slides and
+  two circles. The incoming clip is pulled back over its predecessor using its own head
+  handle, so clip positions never move and removing a transition is lossless.
+- **Track lock, mute, hide** and a per-track gain fader in a decibel-calibrated mixer.
+- **Dual monitors** — the clip monitor shows raw source from the bin, the project monitor
+  shows the composited edit.
+- **Native menu** with real accelerators; every item routes to the same handler the UI
+  buttons use, so there is no second implementation to drift.
+- **MCP server** on `http://127.0.0.1:19789/mcp`, 30 tools, bound to loopback only.
 - **Export** — H.264 / AAC MP4 with live progress and cancellation.
 - **Undo/redo** shared by the UI and the agent: an agent's edit is undoable from the toolbar,
   and a UI edit is undoable from the `undo` tool.
@@ -23,11 +38,13 @@ rather than inheriting the original's GPLv3.
 ## Architecture
 
 ```
-src/core/      Pure domain. No Electron, no Node, no I/O — this is where correctness lives.
-  model.ts     Timeline / Track / Clip. Frames are the source of truth; seconds only at boundaries.
-  ops.ts       Every mutation. UI, MCP and tests all go through these functions.
-  render.ts    Timeline -> FFmpeg argv. Pure, so the render graph is unit-testable without FFmpeg.
-  timecode.ts  Frame <-> timecode conversion.
+src/core/        Pure domain. No Electron, no Node, no I/O — this is where correctness lives.
+  model.ts       Timeline / Track / Clip. Frames are the source of truth; seconds only at boundaries.
+  ops.ts         Every mutation. UI, MCP and tests all go through these functions.
+  effects.ts     Effect registry: parameters, bounds, and the FFmpeg filter each becomes.
+  transitions.ts Transition rendering, resolved to alpha or geometry on the incoming clip.
+  render.ts      Timeline -> FFmpeg argv. Pure, so the render graph is unit-testable without FFmpeg.
+  timecode.ts    Frame <-> timecode conversion.
 
 src/main/      Electron main process.
   project/store.ts  The single owner of mutable state, plus undo history and atomic save.
@@ -52,7 +69,9 @@ Two rules hold the design together:
 `create_timeline` · `set_active_timeline` · `set_project_settings` · `add_track` ·
 `set_track_flags` · `add_clips` · `remove_clips` · `split_clips` · `move_clips` ·
 `set_clip_properties` · `add_texts` · `update_text` · `add_markers` · `capture_frame` ·
-`export_project` · `undo`
+`export_project` · `undo` · `list_effects` · `apply_effect` · `get_clip_effects` ·
+`set_effect` · `remove_effect` · `reorder_effect` · `list_transitions` · `add_transition` ·
+`remove_transition`
 
 Tools refuse rather than improvise. An overlapping placement, a duration the media cannot
 supply, or a fade longer than its clip returns an actionable error and changes nothing —
@@ -76,13 +95,16 @@ success-shaped response, and they do not create an undo step.
 ```bash
 npm install
 npm run dev        # Electron with HMR on the renderer
-npm test           # 70 tests: domain, render graph, timecode, and MCP end-to-end
+npm test           # 135 tests: domain, effects, render graph, timecode, MCP and FFmpeg end-to-end
 npm run typecheck
 ```
 
-`npm test` includes an end-to-end suite that starts the real MCP server, drives it over
-HTTP, renders with the real FFmpeg binary and reads the result back with `ffprobe`. A
-success-shaped tool response is never accepted as proof on its own.
+`npm test` includes two end-to-end suites. One starts the real MCP server, drives it over
+HTTP, renders with the real FFmpeg binary and reads the result back with `ffprobe`. The
+other renders every one of the 21 effects and 11 transitions through FFmpeg, because
+filter-graph expressions — especially the `geq` alpha maths behind wipes and circles —
+cannot be proven correct by inspection. A success-shaped tool response is never accepted as
+proof on its own.
 
 FFmpeg resolution, most specific first: `PALMIER_FFMPEG` / `PALMIER_FFPROBE`, then the
 packaged app's resources, then `resources/ffmpeg/<platform>-<arch>/`, then `PATH`. On Linux
@@ -133,6 +155,9 @@ SmartScreen warning either way.
 - Media is referenced by absolute path, not copied into the project folder. Moving a source
   file breaks the clips that use it.
 - Playback is frame-by-frame scrubbing through FFmpeg, not realtime playback.
+- Effects have fixed parameters; there is no keyframe animation on them yet.
+- Wipe and circle transitions evaluate `geq` per pixel per frame and render roughly five
+  times slower than the fade-based kinds.
 - Track order is composite order: track 0 is the bottom layer. Audio tracks therefore appear
   interleaved with video tracks in the header list rather than grouped below them.
 - No keyframe animation, effects, colour grading, transcription or generative models. Those

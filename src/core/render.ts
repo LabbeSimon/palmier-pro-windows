@@ -17,7 +17,10 @@ import {
   type MediaAsset,
   type Project,
   type Timeline,
+  type Track,
 } from './model.js'
+import { effectChain } from './effects.js'
+import { transitionRender } from './transitions.js'
 import { ffmpegTime, framesToSeconds } from './timecode.js'
 
 export interface RenderOptions {
@@ -104,6 +107,9 @@ interface ResolvedClip {
   asset: MediaAsset | null
   trackMuted: boolean
   trackHidden: boolean
+  trackVolume: number
+  /** Clip immediately before this one on the same track, if they butt together. */
+  previous: Clip | null
   /** Bottom-up composite order. */
   layer: number
 }
@@ -111,14 +117,25 @@ interface ResolvedClip {
 function resolveClips(project: Project, timeline: Timeline, startFrame: number, endFrame: number): ResolvedClip[] {
   const resolved: ResolvedClip[] = []
   timeline.tracks.forEach((track, layer) => {
-    for (const clip of track.clips) {
-      if (clipEndFrame(clip) <= startFrame || clip.startFrame >= endFrame) continue
+    const ordered = [...track.clips].sort((a, b) => a.startFrame - b.startFrame)
+    ordered.forEach((clip, index) => {
+      // A transition pulls the clip back, so its visible span starts earlier.
+      const overlap = clip.transitionIn?.durationFrames ?? 0
+      if (clipEndFrame(clip) <= startFrame || clip.startFrame - overlap >= endFrame) return
       const asset = clip.mediaRef ? (project.assets.find((a) => a.id === clip.mediaRef) ?? null) : null
       if (clip.mediaType !== 'text' && !asset) {
         throw new RenderError(`clip ${clip.id} references missing media ${clip.mediaRef}`)
       }
-      resolved.push({ clip, asset, trackMuted: track.muted, trackHidden: track.hidden, layer })
-    }
+      resolved.push({
+        clip,
+        asset,
+        trackMuted: track.muted,
+        trackHidden: track.hidden,
+        trackVolume: track.volume ?? 1,
+        previous: index > 0 ? ordered[index - 1]! : null,
+        layer,
+      })
+    })
   })
   return resolved.sort((a, b) => a.layer - b.layer || a.clip.startFrame - b.clip.startFrame)
 }
@@ -151,10 +168,25 @@ export function buildRenderCommand(
   let videoStage = 0
   const audioLabels: string[] = []
 
-  for (const { clip, asset, trackMuted, trackHidden } of resolved) {
-    const clipStartSeconds = framesToSeconds(clip.startFrame, fps) - timelineStartSeconds
+  // A dissolve needs the outgoing clip to fade under the incoming one; the
+  // incoming clip owns the transition, so the previous clip is told here.
+  const fadeOutUnder = new Map<string, number>()
+  for (const { clip, previous } of resolved) {
+    const transition = clip.transitionIn
+    if (!transition || !previous) continue
+    if (transitionRender(transition.kind, 0, 1, 1, 1).fadeOutPrevious) {
+      fadeOutUnder.set(previous.id, transition.durationFrames)
+    }
+  }
+
+  for (const { clip, asset, trackMuted, trackHidden, trackVolume } of resolved) {
+    // The transition pulls the clip back over its predecessor using its head handle.
+    const overlapFrames = clip.transitionIn?.durationFrames ?? 0
+    const renderStartFrame = clip.startFrame - overlapFrames
+    const clipStartSeconds = framesToSeconds(renderStartFrame, fps) - timelineStartSeconds
     const clipEndSeconds = framesToSeconds(clipEndFrame(clip), fps) - timelineStartSeconds
     const enable = `between(t,${clipStartSeconds.toFixed(6)},${clipEndSeconds.toFixed(6)})`
+    const underFade = fadeOutUnder.get(clip.id) ?? 0
 
     // --- Text: drawn straight onto the composite, no input stream needed.
     if (clip.mediaType === 'text') {
@@ -192,8 +224,11 @@ export function buildRenderCommand(
     }
 
     const source = asset!
-    const sourceStartSeconds = framesToSeconds(clip.trimStartFrame, fps)
-    const sourceDurationSeconds = framesToSeconds(sourceFramesConsumed(clip), fps)
+    const sourceStartSeconds = framesToSeconds(clip.trimStartFrame - overlapFrames, fps)
+    const sourceDurationSeconds = framesToSeconds(
+      sourceFramesConsumed(clip) + Math.round(overlapFrames * clip.speed),
+      fps,
+    )
 
     // --- Input. -ss before -i seeks the demuxer, which is far cheaper than trimming in the graph.
     if (source.type === 'image') {
@@ -240,26 +275,50 @@ export function buildRenderCommand(
       if (clip.speed !== 1) chain.push(`setpts=PTS/${clip.speed.toFixed(6)}`)
       chain.push(`fps=${fps}`, 'format=yuva420p')
 
+      // The effect stack sits after geometry and before the opacity envelope, so
+      // a grade sees the framed image and fades still ride on top of it.
+      chain.push(...effectChain(clip.effects, 'video'))
+
+      // Fades are authored against the clip's own start, which the transition moved.
+      const headOffset = framesToSeconds(overlapFrames, fps)
       if (clip.fadeInFrames > 0) {
-        chain.push(`fade=t=in:st=0:d=${framesToSeconds(clip.fadeInFrames, fps).toFixed(6)}:alpha=1`)
+        chain.push(
+          `fade=t=in:st=${headOffset.toFixed(6)}:d=${framesToSeconds(clip.fadeInFrames, fps).toFixed(6)}:alpha=1`,
+        )
       }
-      if (clip.fadeOutFrames > 0) {
-        const outStart = framesToSeconds(clip.durationFrames - clip.fadeOutFrames, fps)
-        chain.push(`fade=t=out:st=${outStart.toFixed(6)}:d=${framesToSeconds(clip.fadeOutFrames, fps).toFixed(6)}:alpha=1`)
+      const totalFadeOut = Math.max(clip.fadeOutFrames, underFade)
+      if (totalFadeOut > 0) {
+        const outStart = framesToSeconds(clip.durationFrames + overlapFrames - totalFadeOut, fps)
+        chain.push(
+          `fade=t=out:st=${outStart.toFixed(6)}:d=${framesToSeconds(totalFadeOut, fps).toFixed(6)}:alpha=1`,
+        )
       }
       if (clip.opacity < 1) chain.push(`colorchannelmixer=aa=${clip.opacity.toFixed(6)}`)
 
       // Shift the stream to its timeline position so `enable` and overlay agree.
       chain.push(`setpts=PTS-STARTPTS+${clipStartSeconds.toFixed(6)}/TB`)
 
+      let overlayX: string = String(Math.round(clip.transform.centerX * width - boxW / 2))
+      let overlayY: string = String(Math.round(clip.transform.centerY * height - boxH / 2))
+      if (clip.transitionIn && overlapFrames > 0) {
+        const render = transitionRender(
+          clip.transitionIn.kind,
+          clipStartSeconds,
+          framesToSeconds(overlapFrames, fps),
+          boxW,
+          boxH,
+        )
+        chain.push(...render.filters)
+        if (render.overlayX) overlayX = render.overlayX(Number(overlayX), boxW)
+        if (render.overlayY) overlayY = render.overlayY(Number(overlayY), boxH)
+      }
+
       const prepared = `cv${index}`
       filters.push(`[${index}:v]${chain.join(',')}[${prepared}]`)
 
-      const x = Math.round(clip.transform.centerX * width - boxW / 2)
-      const y = Math.round(clip.transform.centerY * height - boxH / 2)
       const out = `vs${videoStage++}`
       filters.push(
-        `[${videoLabel}][${prepared}]overlay=x=${x}:y=${y}:enable='${enable}':eof_action=pass:shortest=0[${out}]`,
+        `[${videoLabel}][${prepared}]overlay=x='${overlayX}':y='${overlayY}':enable='${enable}':eof_action=pass:shortest=0[${out}]`,
       )
       videoLabel = out
     }
@@ -269,7 +328,9 @@ export function buildRenderCommand(
     if (carriesAudio && !trackMuted && clip.volume > 0 && !options.videoOnly) {
       const chain: string[] = ['aresample=48000', 'asetpts=PTS-STARTPTS']
       if (clip.speed !== 1) chain.push(...atempoChain(clip.speed))
-      if (clip.volume !== 1) chain.push(`volume=${clip.volume.toFixed(6)}`)
+      chain.push(...effectChain(clip.effects, 'audio'))
+      const gain = clip.volume * trackVolume
+      if (Math.abs(gain - 1) > 1e-6) chain.push(`volume=${gain.toFixed(6)}`)
       if (clip.fadeInFrames > 0) {
         chain.push(`afade=t=in:st=0:d=${framesToSeconds(clip.fadeInFrames, fps).toFixed(6)}`)
       }

@@ -1,5 +1,5 @@
 import type { Project, Timeline } from '../../core/model.js'
-import { framesToTimecode } from '../../core/timecode.js'
+import { IconImport, IconRedo, IconRipple, IconText, IconTrash, IconUndo } from './Icons.js'
 
 interface Props {
   project: Project
@@ -42,19 +42,36 @@ export function Toolbar(props: Props) {
 
       <span className="divider" />
 
-      <button onClick={props.onImport}>Import media</button>
-      <button onClick={props.onAddText}>Add text</button>
+      <button className="icon-btn wide" onClick={props.onImport} title="Import media files">
+        <IconImport /> Import
+      </button>
+      <button className="icon-btn wide" onClick={props.onAddText} title="Add a text clip at the playhead">
+        <IconText /> Text
+      </button>
 
       <span className="divider" />
 
-      <button onClick={props.onUndo} disabled={!props.canUndo} title="Ctrl+Z">Undo</button>
-      <button onClick={props.onRedo} disabled={!props.canRedo} title="Ctrl+Shift+Z">Redo</button>
-      <button onClick={props.onSplit} title="Split at the playhead (S)">Split</button>
-      <button onClick={() => props.onDelete(false)} disabled={!hasSelection} title="Delete (Del)">
-        Delete
+      <button className="icon-btn" onClick={props.onUndo} disabled={!props.canUndo} title="Undo (Ctrl+Z)">
+        <IconUndo />
       </button>
-      <button onClick={() => props.onDelete(true)} disabled={!hasSelection} title="Delete and close the gap (Shift+Del)">
-        Ripple delete
+      <button className="icon-btn" onClick={props.onRedo} disabled={!props.canRedo} title="Redo (Ctrl+Shift+Z)">
+        <IconRedo />
+      </button>
+      <button
+        className="icon-btn"
+        onClick={() => props.onDelete(false)}
+        disabled={!hasSelection}
+        title="Delete selection (Del)"
+      >
+        <IconTrash />
+      </button>
+      <button
+        className="icon-btn"
+        onClick={() => props.onDelete(true)}
+        disabled={!hasSelection}
+        title="Ripple delete — remove and close the gap (Shift+Del)"
+      >
+        <IconRipple />
       </button>
 
       <span className="spacer" />
@@ -71,12 +88,6 @@ export function Toolbar(props: Props) {
           </option>
         ))}
       </select>
-
-      <span className="divider" />
-
-      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-sm)' }}>
-        {framesToTimecode(props.playhead, timeline.fps)}
-      </span>
 
       {props.exporting ? (
         <button onClick={props.onCancelExport}>Cancel export</button>

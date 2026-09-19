@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { readFile } from 'node:fs/promises'
@@ -6,7 +6,8 @@ import { readFile } from 'node:fs/promises'
 import { activeTimeline, type MediaAsset, type Project } from '../core/model.js'
 import * as ops from '../core/ops.js'
 import { OpError, type Receipt } from '../core/ops.js'
-import { FFmpegError, ffmpegVersion, generateThumbnail, probeAsset, renderFrame, renderTimeline, type RenderHandle } from './media/ffmpeg.js'
+import { FFmpegError, ffmpegVersion, generateThumbnail, probeAsset, renderAssetFrame, renderFrame, renderTimeline, type RenderHandle } from './media/ffmpeg.js'
+import { buildMenu } from './menu.js'
 import { MCPServer, DEFAULT_MCP_PORT } from './mcp/server.js'
 import { cacheDirFor, loadProject, ProjectStore, saveProject } from './project/store.js'
 
@@ -28,11 +29,10 @@ function createWindow(): void {
   window = new BrowserWindow({
     width: 1600,
     height: 980,
-    minWidth: 1100,
-    minHeight: 700,
+    minWidth: 1180,
+    minHeight: 720,
     backgroundColor: '#0e0e11',
     show: false,
-    autoHideMenuBar: true,
     title: 'Palmier Win',
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
@@ -42,6 +42,7 @@ function createWindow(): void {
     },
   })
 
+  Menu.setApplicationMenu(buildMenu(window))
   window.once('ready-to-show', () => window?.show())
   window.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url)
@@ -185,6 +186,13 @@ handle('ops:createTimeline', (args) => store.apply((p) => ops.createTimeline(p, 
 handle('ops:setActiveTimeline', (args) => store.apply((p) => ops.setActiveTimeline(p, args.timelineId)))
 handle('ops:setProjectSettings', (args) => store.apply((p) => ops.setProjectSettings(p, args)))
 handle('ops:removeAssets', (args) => store.apply((p) => ops.removeAssets(p, args.assetIds)))
+handle('ops:shiftClips', (args) => store.apply((p) => ops.shiftClips(p, args)))
+handle('ops:addEffect', (args) => store.apply((p) => ops.addEffect(p, args)))
+handle('ops:removeEffect', (args) => store.apply((p) => ops.removeEffect(p, args)))
+handle('ops:setEffectParams', (args) => store.apply((p) => ops.setEffectParams(p, args)))
+handle('ops:reorderEffect', (args) => store.apply((p) => ops.reorderEffect(p, args)))
+handle('ops:addTransition', (args) => store.apply((p) => ops.addTransition(p, args)))
+handle('ops:removeTransition', (args) => store.apply((p) => ops.removeTransition(p, args)))
 
 // --- Media ----------------------------------------------------------------
 
@@ -232,6 +240,15 @@ handle('render:frame', async (frame: number) => {
   await renderFrame(project, timeline, frame, output)
   const data = await readFile(output)
   return `data:image/png;base64,${data.toString('base64')}`
+})
+
+handle('render:assetFrame', async (args: { assetId: string; seconds: number }) => {
+  const asset = store.project.assets.find((a) => a.id === args.assetId)
+  if (!asset) throw new OpError('not_found', `media asset ${args.assetId} is not in this project`)
+  const output = join(cacheDirFor(store.project.path), `clip-${asset.id}-${Math.round(args.seconds * 1000)}.jpg`)
+  await renderAssetFrame(asset, args.seconds, output)
+  const data = await readFile(output)
+  return `data:image/jpeg;base64,${data.toString('base64')}`
 })
 
 handle('render:export', async (args: { outputPath?: string; quality?: 'draft' | 'balanced' | 'high' }) => {

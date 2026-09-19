@@ -1,0 +1,164 @@
+import { useEffect, useRef, useState } from 'react'
+
+import type { MediaAsset, Timeline } from '../../core/model.js'
+import { framesToTimecode } from '../../core/timecode.js'
+import { Transport } from './Transport.js'
+
+interface Props {
+  timeline: Timeline
+  frame: number
+  totalFrames: number
+  image: string | null
+  busy: boolean
+  error: string | null
+  empty: boolean
+  /** Asset shown in the clip monitor; null when nothing is picked in the bin. */
+  clipAsset: MediaAsset | null
+  onSeek: (frame: number) => void
+  onSplit: () => void
+}
+
+type Monitor = 'project' | 'clip'
+
+/**
+ * Two monitors, as an editor expects: the clip monitor shows the raw source
+ * from the bin, the project monitor shows the composited edit. Keeping them in
+ * one pane with tabs rather than side by side preserves picture size on a
+ * laptop, which is the machine this runs on.
+ */
+export function Monitors(props: Props) {
+  const [monitor, setMonitor] = useState<Monitor>('project')
+  const [clipSeconds, setClipSeconds] = useState(0)
+
+  // Picking a different asset should start that clip from its head.
+  useEffect(() => setClipSeconds(0), [props.clipAsset?.id])
+
+  const clipFrame = useClipFrame(props.clipAsset, clipSeconds, monitor === 'clip')
+  const showClip = monitor === 'clip'
+
+  return (
+    <div className="panel">
+      <div className="tabs monitors" role="tablist">
+        <button
+          role="tab"
+          aria-selected={monitor === 'clip'}
+          className={monitor === 'clip' ? 'on' : ''}
+          onClick={() => setMonitor('clip')}
+        >
+          Clip monitor
+        </button>
+        <button
+          role="tab"
+          aria-selected={monitor === 'project'}
+          className={monitor === 'project' ? 'on' : ''}
+          onClick={() => setMonitor('project')}
+        >
+          Project monitor
+        </button>
+      </div>
+
+      <div className="preview">
+        {showClip ? (
+          props.clipAsset ? (
+            clipFrame.image ? (
+              <img src={clipFrame.image} alt={props.clipAsset.name} />
+            ) : (
+              <p className="placeholder">{clipFrame.error ?? 'Loading the source…'}</p>
+            )
+          ) : (
+            <p className="placeholder">
+              Nothing picked.
+              <br />
+              Select a file in the project bin to inspect it here.
+            </p>
+          )
+        ) : props.empty ? (
+          <p className="placeholder">
+            The timeline is empty.
+            <br />
+            Drag media from the bin onto a track, or ask an agent over MCP.
+          </p>
+        ) : props.error ? (
+          <p className="placeholder error">
+            Preview failed
+            <br />
+            <span className="detail">{props.error}</span>
+          </p>
+        ) : props.image ? (
+          <img src={props.image} alt={`Frame ${props.frame}`} />
+        ) : (
+          <p className="placeholder">Rendering the first frame…</p>
+        )}
+
+        {(showClip ? clipFrame.busy : props.busy) ? <span className="badge busy">Rendering</span> : null}
+        {showClip ? (
+          props.clipAsset ? <span className="badge tc">{clipSeconds.toFixed(2)} s</span> : null
+        ) : props.empty ? null : (
+          <span className="badge tc">{framesToTimecode(props.frame, props.timeline.fps)}</span>
+        )}
+      </div>
+
+      {showClip ? (
+        <div className="transport">
+          <span className="timecode">{clipSeconds.toFixed(2)}</span>
+          <span className="total">/ {(props.clipAsset?.durationSeconds ?? 0).toFixed(2)} s</span>
+          <input
+            className="scrub"
+            type="range"
+            min={0}
+            max={Math.max(0.01, props.clipAsset?.durationSeconds ?? 0)}
+            step={0.04}
+            value={clipSeconds}
+            disabled={!props.clipAsset || (props.clipAsset.durationSeconds ?? 0) <= 0}
+            aria-label="Scrub the source clip"
+            onChange={(event) => setClipSeconds(Number(event.target.value))}
+          />
+          <span className="format">
+            {props.clipAsset ? `${props.clipAsset.width}×${props.clipAsset.height}` : '—'}
+          </span>
+        </div>
+      ) : (
+        <Transport
+          timeline={props.timeline}
+          frame={props.frame}
+          totalFrames={props.totalFrames}
+          onSeek={props.onSeek}
+          onSplit={props.onSplit}
+        />
+      )}
+    </div>
+  )
+}
+
+/** Debounced source-frame fetch; a stale response never overwrites a newer one. */
+function useClipFrame(asset: MediaAsset | null, seconds: number, enabled: boolean) {
+  const [image, setImage] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const generation = useRef(0)
+
+  useEffect(() => {
+    if (!enabled || !asset) return
+    if (asset.type === 'audio' || asset.type === 'subtitle') {
+      setImage(null)
+      setError('This media has no picture.')
+      return
+    }
+    const id = ++generation.current
+    const timer = setTimeout(async () => {
+      setBusy(true)
+      const result = await window.palmier.render.assetFrame(asset.id, seconds)
+      if (id !== generation.current) return
+      setBusy(false)
+      if (result.ok) {
+        setImage(result.value)
+        setError(null)
+      } else {
+        setError(result.message)
+      }
+    }, 140)
+    return () => clearTimeout(timer)
+  }, [asset, seconds, enabled])
+
+  return { image, busy, error }
+}

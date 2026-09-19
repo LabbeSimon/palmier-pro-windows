@@ -274,6 +274,31 @@ export async function renderFrame(
   return outputPath
 }
 
+/**
+ * A single frame straight from a source file, for the clip monitor. This
+ * deliberately bypasses the timeline graph: the clip monitor shows the raw
+ * media, not the edit.
+ */
+export async function renderAssetFrame(
+  asset: MediaAsset,
+  seconds: number,
+  outputPath: string,
+  maxWidth = 960,
+): Promise<string> {
+  await mkdir(dirname(outputPath), { recursive: true })
+  const args = ['-hide_banner', '-nostdin', '-y']
+  if (asset.type !== 'image') args.push('-ss', Math.max(0, seconds).toFixed(6))
+  args.push(
+    '-i', asset.path,
+    '-frames:v', '1',
+    '-vf', `scale='min(${maxWidth},iw)':-2:flags=bicubic`,
+    '-update', '1',
+    outputPath,
+  )
+  await run(FFMPEG_PATH, args)
+  return outputPath
+}
+
 export async function ffmpegVersion(): Promise<string> {
   const { stdout } = await run(FFMPEG_PATH, ['-version'])
   return stdout.split('\n')[0] ?? 'unknown'
