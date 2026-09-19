@@ -1,0 +1,8 @@
+node_modules/
+out/
+dist/
+resources/ffmpeg/
+.ffmpeg-download/
+*.log
+.DS_Store
+palmier-win-cache/

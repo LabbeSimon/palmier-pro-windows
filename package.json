@@ -1,0 +1,117 @@
+{
+  "name": "palmier-win",
+  "version": "0.1.0",
+  "description": "AI-native video editor for Windows. Agents edit the timeline directly over MCP.",
+  "license": "Apache-2.0",
+  "author": {
+    "name": "Simon Labbé",
+    "email": "contact@simonlabbe.fr"
+  },
+  "main": "out/main/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "fetch:ffmpeg": "node scripts/fetch-ffmpeg.mjs win32-x64",
+    "package:win": "npm run fetch:ffmpeg && npm run build && electron-builder --win --x64",
+    "package:win:portable": "npm run fetch:ffmpeg && npm run build && electron-builder --win portable --x64",
+    "package:win:zip": "npm run fetch:ffmpeg && npm run build && electron-builder --win zip --x64",
+    "fetch:ffmpeg:linux": "node scripts/fetch-ffmpeg.mjs linux-x64",
+    "package:linux": "npm run fetch:ffmpeg:linux && npm run build && electron-builder --linux --x64"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8"
+  },
+  "build": {
+    "appId": "fr.simonlabbe.palmierwin",
+    "productName": "Palmier Win",
+    "directories": {
+      "output": "dist",
+      "buildResources": "resources"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "signAndEditExecutable": false,
+      "extraResources": [
+        {
+          "from": "resources/ffmpeg/win32-x64",
+          "to": "ffmpeg",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "artifactName": "${productName}-${version}-x64-setup.${ext}"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "AudioVideo",
+      "synopsis": "AI-native video editor driven over MCP",
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "extraResources": [
+        {
+          "from": "resources/ffmpeg/linux-x64",
+          "to": "ffmpeg",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ],
+      "maintainer": "Simon Labbé <contact@simonlabbe.fr>"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-x64-portable.${ext}"
+    }
+  },
+  "homepage": "https://simonlabbe.fr"
+}
