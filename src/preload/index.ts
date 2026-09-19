@@ -73,6 +73,7 @@ const api = {
     setWorkZone: (args: unknown) => invoke<Receipt>('ops:setWorkZone', args),
     groupClips: (args: unknown) => invoke<Receipt>('ops:groupClips', args),
     ungroupClips: (args: unknown) => invoke<Receipt>('ops:ungroupClips', args),
+    trimClip: (args: unknown) => invoke<Receipt>('ops:trimClip', args),
     addEffect: (args: unknown) => invoke<Receipt>('ops:addEffect', args),
     removeEffect: (args: unknown) => invoke<Receipt>('ops:removeEffect', args),
     setEffectParams: (args: unknown) => invoke<Receipt>('ops:setEffectParams', args),

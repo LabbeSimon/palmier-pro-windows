@@ -639,6 +639,40 @@ export const TOOLS: ToolDefinition[] = [
       ),
   },
   {
+    name: 'trim_clip',
+    description:
+      'The four trims editors name: ripple moves one edge and slides everything after it; roll moves the cut ' +
+      'between two butted clips so one grows as the other shrinks; slip changes which part of the source a clip ' +
+      'shows without moving it; slide moves a clip while its neighbours absorb the difference. Each is refused ' +
+      'with the exact figure when there is not enough handle or the neighbour is too short.',
+    inputSchema: object(
+      {
+        timeline_id: str('Defaults to the active timeline.'),
+        clip_id: str('Clip to trim.'),
+        kind: { type: 'string', enum: ops.TRIM_KINDS, description: 'Which trim to perform.' },
+        delta_frames: int('Frames to move by. Negative shortens or moves earlier.'),
+        edge: {
+          type: 'string',
+          enum: ['start', 'end'],
+          description: 'Which edge ripple and roll act on. Ignored by slip and slide. Default end.',
+        },
+      },
+      ['clip_id', 'kind', 'delta_frames'],
+    ),
+    handler: (args, ctx) =>
+      receiptPayload(
+        ctx.store.apply((p) =>
+          ops.trimClip(p, {
+            timelineId: args.timeline_id,
+            clipId: args.clip_id,
+            kind: args.kind,
+            deltaFrames: args.delta_frames,
+            edge: args.edge,
+          }),
+        ),
+      ),
+  },
+  {
     name: 'group_clips',
     description:
       'Bind clips so they move, trim and delete as one. Grouping a clip that is already grouped merges the two ' +

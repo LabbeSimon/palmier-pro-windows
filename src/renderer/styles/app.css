@@ -1380,3 +1380,18 @@ input[type='range']:hover::-webkit-slider-thumb {
 .clip.grouped {
   box-shadow: inset 0 2px 0 0 var(--warn);
 }
+
+/* Trim nudges: four equal steps, so the row reads as one control. */
+.field.trim-row {
+  grid-template-columns: 56px 1fr;
+}
+.trim-buttons {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 2px;
+}
+.trim-buttons button {
+  font-size: var(--fs-meta);
+  padding: 1px 0;
+  font-variant-numeric: tabular-nums;
+}

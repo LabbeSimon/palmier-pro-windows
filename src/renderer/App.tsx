@@ -400,6 +400,9 @@ export function App() {
               onRemoveTransition={(clipId) =>
                 void run(() => window.palmier.ops.removeTransition({ timelineId, clipId }))
               }
+              onTrim={(clipId, kind, deltaFrames, edge) =>
+                void run(() => window.palmier.ops.trimClip({ timelineId, clipId, kind, deltaFrames, edge }))
+              }
             />
           ) : (
             <div className="panel">

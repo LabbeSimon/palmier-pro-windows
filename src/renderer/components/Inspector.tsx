@@ -18,6 +18,7 @@ interface Props {
   onReorderEffect: (clipId: string, effectId: string, toIndex: number) => void
   onSetTransition: (clipId: string, kind: string, durationFrames: number) => void
   onRemoveTransition: (clipId: string) => void
+  onTrim: (clipId: string, kind: string, deltaFrames: number, edge?: 'start' | 'end') => void
 }
 
 /** Commits on blur or Enter so a half-typed value never reaches the domain layer. */
@@ -186,6 +187,40 @@ export function Inspector(props: Props) {
                 onCommit={(speed) => props.onApply({ speed })}
               />
             </div>
+
+            {clip ? (
+              <div className="field-group">
+                <h4>Trim</h4>
+                <p className="hint">
+                  Ripple slides what follows · Roll moves the cut · Slip changes the shown part · Slide moves
+                  the clip between its neighbours.
+                </p>
+                {([
+                  ['ripple', 'end'],
+                  ['roll', 'end'],
+                  ['slip', undefined],
+                  ['slide', undefined],
+                ] as const).map(([kind, edge]) => (
+                  <div className="field trim-row" key={kind}>
+                    <label>{kind[0]!.toUpperCase() + kind.slice(1)}</label>
+                    <span className="trim-buttons">
+                      <button title={`${kind} by -10 frames`} onClick={() => props.onTrim(clip.id, kind, -10, edge)}>
+                        −10
+                      </button>
+                      <button title={`${kind} by -1 frame`} onClick={() => props.onTrim(clip.id, kind, -1, edge)}>
+                        −1
+                      </button>
+                      <button title={`${kind} by +1 frame`} onClick={() => props.onTrim(clip.id, kind, 1, edge)}>
+                        +1
+                      </button>
+                      <button title={`${kind} by +10 frames`} onClick={() => props.onTrim(clip.id, kind, 10, edge)}>
+                        +10
+                      </button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
 
             <div className="field-group">
               <h4>Levels</h4>

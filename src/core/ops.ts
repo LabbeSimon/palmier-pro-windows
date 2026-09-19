@@ -1974,3 +1974,217 @@ export function ungroupClips(
     },
   }
 }
+
+// --- Advanced trim --------------------------------------------------------
+
+/**
+ * The four trims every NLE offers, on the same names editors use:
+ *
+ * - `ripple` moves one edge and slides everything after it, keeping the cut
+ *   tight — the edit gets longer or shorter
+ * - `roll`   moves the cut between two clips, one grows as the other shrinks —
+ *   total length never changes
+ * - `slip`   changes which part of the source a clip shows, without moving it
+ * - `slide`  moves a clip in time, its neighbours absorbing the difference
+ */
+export type TrimKind = 'ripple' | 'roll' | 'slip' | 'slide'
+
+export const TRIM_KINDS: TrimKind[] = ['ripple', 'roll', 'slip', 'slide']
+
+export interface TrimArgs {
+  timelineId?: string
+  clipId: string
+  kind: TrimKind
+  /** Frames to move by. Negative shortens or moves earlier. */
+  deltaFrames: number
+  /** Which edge ripple and roll act on. Ignored by slip and slide. */
+  edge?: 'start' | 'end'
+}
+
+/** Source frames still available beyond each edge of a clip. */
+function handles(project: Project, clip: Clip): { head: number; tail: number } {
+  const asset = clip.mediaRef ? project.assets.find((a) => a.id === clip.mediaRef) : undefined
+  if (!asset || asset.type === 'image' || asset.durationSeconds <= 0) {
+    // A still has unlimited material; only the timeline constrains it.
+    return { head: Number.MAX_SAFE_INTEGER, tail: Number.MAX_SAFE_INTEGER }
+  }
+  return { head: clip.trimStartFrame, tail: Math.max(0, clip.trimEndFrame) }
+}
+
+export function trimClip(project: Project, args: TrimArgs): MutationResult {
+  if (!TRIM_KINDS.includes(args.kind)) {
+    throw new OpError('invalid_argument', `kind must be one of ${TRIM_KINDS.join(', ')}`)
+  }
+  const delta = Math.round(requireFinite(args.deltaFrames, 'deltaFrames'))
+  const target = requireTimeline(project, args.timelineId)
+  requireClip(target, args.clipId)
+
+  if (delta === 0) {
+    return {
+      project,
+      receipt: {
+        operation: 'trim_clip',
+        changed: false,
+        summary: 'Nothing to trim',
+        affectedIds: [args.clipId],
+        warnings: [],
+      },
+    }
+  }
+
+  const next = clone(project)
+  const timeline = next.timelines.find((t) => t.id === target.id)!
+  const loc = requireClip(timeline, args.clipId)
+  refuseIfLocked(loc.track, 'trimming its clips')
+
+  const clip = loc.clip
+  const ordered = [...loc.track.clips].sort((a, b) => a.startFrame - b.startFrame)
+  const index = ordered.findIndex((c) => c.id === clip.id)
+  const previous = index > 0 ? ordered[index - 1]! : null
+  const following = index < ordered.length - 1 ? ordered[index + 1]! : null
+  const room = handles(next, clip)
+  const edge = args.edge ?? 'end'
+  const touched: string[] = [clip.id]
+
+  // Captured before any mutation: the threshold for "downstream" has to be the
+  // clip's end *before* it was resized, or the next clip is left overlapping.
+  const originalEnd = clipEndFrame(clip)
+
+  switch (args.kind) {
+    case 'ripple': {
+      if (edge === 'end') {
+        if (delta > 0 && delta > room.tail) {
+          throw new OpError('refused', `only ${room.tail} frame(s) of tail handle remain`)
+        }
+        if (clip.durationFrames + delta < 1) {
+          throw new OpError('refused', 'a clip cannot be shortened below one frame')
+        }
+        clip.durationFrames += delta
+        clip.trimEndFrame = Math.max(0, clip.trimEndFrame - Math.round(delta * clip.speed))
+      } else {
+        if (delta < 0 && -delta > room.head) {
+          throw new OpError('refused', `only ${room.head} frame(s) of head handle remain`)
+        }
+        if (clip.durationFrames - delta < 1) {
+          throw new OpError('refused', 'a clip cannot be shortened below one frame')
+        }
+        clip.startFrame += delta
+        clip.durationFrames -= delta
+        clip.trimStartFrame = Math.max(0, clip.trimStartFrame + Math.round(delta * clip.speed))
+      }
+      // Everything downstream follows, which is what makes it a ripple.
+      for (const other of loc.track.clips) {
+        if (other.id === clip.id || other.startFrame < originalEnd) continue
+        other.startFrame += delta
+        touched.push(other.id)
+      }
+      break
+    }
+
+    case 'roll': {
+      const neighbour = edge === 'end' ? following : previous
+      if (!neighbour) {
+        throw new OpError('refused', `clip ${clip.id} has no neighbour on its ${edge} to roll against`)
+      }
+      if (edge === 'end') {
+        if (clipEndFrame(clip) !== neighbour.startFrame) {
+          throw new OpError('refused', 'roll needs the two clips to butt together')
+        }
+        if (delta > room.tail) throw new OpError('refused', `only ${room.tail} frame(s) of tail handle remain`)
+        const neighbourRoom = handles(next, neighbour)
+        if (-delta > neighbourRoom.head) {
+          throw new OpError('refused', `the next clip only has ${neighbourRoom.head} frame(s) of head handle`)
+        }
+        if (clip.durationFrames + delta < 1 || neighbour.durationFrames - delta < 1) {
+          throw new OpError('refused', 'rolling that far would empty one of the clips')
+        }
+        clip.durationFrames += delta
+        clip.trimEndFrame = Math.max(0, clip.trimEndFrame - Math.round(delta * clip.speed))
+        neighbour.startFrame += delta
+        neighbour.durationFrames -= delta
+        neighbour.trimStartFrame = Math.max(0, neighbour.trimStartFrame + Math.round(delta * neighbour.speed))
+      } else {
+        if (clipEndFrame(neighbour) !== clip.startFrame) {
+          throw new OpError('refused', 'roll needs the two clips to butt together')
+        }
+        if (-delta > room.head) throw new OpError('refused', `only ${room.head} frame(s) of head handle remain`)
+        const neighbourRoom = handles(next, neighbour)
+        if (delta > neighbourRoom.tail) {
+          throw new OpError('refused', `the previous clip only has ${neighbourRoom.tail} frame(s) of tail handle`)
+        }
+        if (clip.durationFrames - delta < 1 || neighbour.durationFrames + delta < 1) {
+          throw new OpError('refused', 'rolling that far would empty one of the clips')
+        }
+        clip.startFrame += delta
+        clip.durationFrames -= delta
+        clip.trimStartFrame = Math.max(0, clip.trimStartFrame + Math.round(delta * clip.speed))
+        neighbour.durationFrames += delta
+        neighbour.trimEndFrame = Math.max(0, neighbour.trimEndFrame - Math.round(delta * neighbour.speed))
+      }
+      touched.push(neighbour.id)
+      break
+    }
+
+    case 'slip': {
+      // Both trims move by the same amount, so position and length hold.
+      const shift = Math.round(delta * clip.speed)
+      if (shift > room.tail) throw new OpError('refused', `only ${room.tail} frame(s) of tail handle remain`)
+      if (-shift > room.head) throw new OpError('refused', `only ${room.head} frame(s) of head handle remain`)
+      clip.trimStartFrame = Math.max(0, clip.trimStartFrame + shift)
+      clip.trimEndFrame = Math.max(0, clip.trimEndFrame - shift)
+      break
+    }
+
+    case 'slide': {
+      if (!previous && delta < 0) {
+        throw new OpError('refused', 'there is no clip before this one to slide into')
+      }
+      if (!following && delta > 0) {
+        throw new OpError('refused', 'there is no clip after this one to slide into')
+      }
+      const shrinking = delta > 0 ? following! : previous!
+      const growing = delta > 0 ? previous : following
+      if (Math.abs(delta) >= shrinking.durationFrames) {
+        throw new OpError(
+          'refused',
+          `sliding by ${delta} would swallow the neighbouring clip (${shrinking.durationFrames} frames)`,
+        )
+      }
+      clip.startFrame += delta
+      if (delta > 0) {
+        shrinking.startFrame += delta
+        shrinking.durationFrames -= delta
+        shrinking.trimStartFrame = Math.max(0, shrinking.trimStartFrame + Math.round(delta * shrinking.speed))
+      } else {
+        shrinking.durationFrames += delta
+        shrinking.trimEndFrame = Math.max(0, shrinking.trimEndFrame - Math.round(delta * shrinking.speed))
+      }
+      touched.push(shrinking.id)
+      if (growing) {
+        if (delta > 0) {
+          growing.durationFrames += delta
+          growing.trimEndFrame = Math.max(0, growing.trimEndFrame - Math.round(delta * growing.speed))
+        } else {
+          growing.startFrame += delta
+          growing.durationFrames -= delta
+          growing.trimStartFrame = Math.max(0, growing.trimStartFrame + Math.round(delta * growing.speed))
+        }
+        touched.push(growing.id)
+      }
+      break
+    }
+  }
+
+  sortClips(loc.track)
+
+  return {
+    project: touch(next),
+    receipt: {
+      operation: 'trim_clip',
+      changed: true,
+      summary: `${args.kind} trim of ${delta} frame(s) on clip ${args.clipId}`,
+      affectedIds: touched,
+      warnings: [],
+    },
+  }
+}
