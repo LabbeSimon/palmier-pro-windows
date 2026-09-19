@@ -1,5 +1,18 @@
 import type { Project, Timeline } from '../../core/model.js'
-import { IconImport, IconRedo, IconRipple, IconText, IconTrash, IconUndo } from './Icons.js'
+import {
+  IconImport,
+  IconMarkerAdd,
+  IconNew,
+  IconOpen,
+  IconRedo,
+  IconRender,
+  IconRipple,
+  IconSave,
+  IconSplit,
+  IconText,
+  IconTrash,
+  IconUndo,
+} from './Icons.js'
 
 interface Props {
   project: Project
@@ -19,6 +32,7 @@ interface Props {
   onSplit: () => void
   onDelete: (ripple: boolean) => void
   onAddText: () => void
+  onAddMarker: () => void
   onExport: () => void
   onCancelExport: () => void
   onSelectTimeline: (id: string) => void
@@ -35,18 +49,31 @@ export function Toolbar(props: Props) {
         {props.dirty ? <span className="dirty" title="Unsaved changes"> •</span> : null}
       </span>
 
-      <button onClick={props.onNew}>New</button>
-      <button onClick={props.onOpen}>Open</button>
-      <button onClick={() => props.onSave(false)}>Save</button>
-      <button onClick={() => props.onSave(true)}>Save as…</button>
+      {/* Icon-only, as a KDE main toolbar is: the tooltip carries the name and
+          its shortcut, and the row stays readable at any window width. */}
+      <button className="icon-btn" onClick={props.onNew} title="New project (Ctrl+N)">
+        <IconNew />
+      </button>
+      <button className="icon-btn" onClick={props.onOpen} title="Open project (Ctrl+O)">
+        <IconOpen />
+      </button>
+      <button className="icon-btn" onClick={() => props.onSave(false)} title="Save (Ctrl+S)">
+        <IconSave />
+      </button>
 
       <span className="divider" />
 
-      <button className="icon-btn wide" onClick={props.onImport} title="Import media files">
-        <IconImport /> Import
+      <button className="icon-btn" onClick={props.onImport} title="Import media (Ctrl+I)">
+        <IconImport />
       </button>
-      <button className="icon-btn wide" onClick={props.onAddText} title="Add a text clip at the playhead">
-        <IconText /> Text
+      <button className="icon-btn" onClick={props.onAddText} title="Add text at the playhead (Ctrl+T)">
+        <IconText />
+      </button>
+      <button className="icon-btn" onClick={props.onAddMarker} title="Add marker at the playhead (M)">
+        <IconMarkerAdd />
+      </button>
+      <button className="icon-btn" onClick={props.onSplit} title="Split at the playhead (S)">
+        <IconSplit />
       </button>
 
       <span className="divider" />
@@ -90,10 +117,10 @@ export function Toolbar(props: Props) {
       </select>
 
       {props.exporting ? (
-        <button onClick={props.onCancelExport}>Cancel export</button>
+        <button onClick={props.onCancelExport}>Cancel render</button>
       ) : (
-        <button className="primary" onClick={props.onExport}>
-          Export MP4
+        <button className="icon-btn wide primary" onClick={props.onExport} title="Render to MP4 (Ctrl+E)">
+          <IconRender /> Render
         </button>
       )}
     </div>

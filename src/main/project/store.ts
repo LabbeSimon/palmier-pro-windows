@@ -192,5 +192,10 @@ export async function loadProject(projectPath: string): Promise<Project> {
   if (!parsed.project?.timelines?.length) {
     throw new OpError('invalid_project', `${target} contains no timeline`)
   }
-  return { ...parsed.project, path: dirname(target) }
+  return {
+    ...parsed.project,
+    path: dirname(target),
+    // Projects written before the work zone existed simply have none.
+    timelines: parsed.project.timelines.map((t) => ({ ...t, workZone: t.workZone ?? null })),
+  }
 }

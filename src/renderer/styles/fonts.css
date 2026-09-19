@@ -1,0 +1,34 @@
+/* Noto Sans — the typeface KDE and Kdenlive ship with. Fetched at build time by
+   scripts/fetch-fonts.mjs and resolved through the `font:` protocol so the same
+   CSS works in dev and inside the packaged app. */
+
+@font-face {
+  font-family: 'Noto Sans';
+  src: url('font://NotoSans-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Noto Sans';
+  src: url('font://NotoSans-Medium.ttf') format('truetype');
+  font-weight: 500;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Noto Sans';
+  src: url('font://NotoSans-SemiBold.ttf') format('truetype');
+  font-weight: 600;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Noto Sans';
+  src: url('font://NotoSans-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Noto Sans Mono';
+  src: url('font://NotoSansMono-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-display: block;
+}

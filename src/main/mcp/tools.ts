@@ -108,6 +108,7 @@ function timelineSnapshot(project: Project, timeline: Timeline): Record<string, 
         ...(clip.textContent ? { textContent: clip.textContent } : {}),
       })),
     })),
+    workZone: timeline.workZone,
     markers: timeline.markers.map((m) => ({
       id: m.id,
       name: m.name,
@@ -623,6 +624,27 @@ export const TOOLS: ToolDefinition[] = [
             clipId: args.clip_id,
             content: args.content,
             style: prune({ fontSize: args.font_size, color: args.color }),
+          }),
+        ),
+      ),
+  },
+  {
+    name: 'set_work_zone',
+    description:
+      'Set or clear the work zone — the in/out band on the ruler that marks the part of the edit you are working ' +
+      'on. Pass null for either bound to clear it, which means the whole timeline is in play.',
+    inputSchema: object({
+      timeline_id: str('Defaults to the active timeline.'),
+      in_frame: int('Zone start. Null clears the zone.'),
+      out_frame: int('Zone end, exclusive. Null clears the zone.'),
+    }),
+    handler: (args, ctx) =>
+      receiptPayload(
+        ctx.store.apply((p) =>
+          ops.setWorkZone(p, {
+            timelineId: args.timeline_id,
+            inFrame: args.in_frame,
+            outFrame: args.out_frame,
           }),
         ),
       ),

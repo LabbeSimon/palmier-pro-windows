@@ -1,28 +1,32 @@
-/* Design tokens. Every component reads from here; no hardcoded values in TSX. */
+/* Design tokens — Breeze Dark, the palette KDE and Kdenlive ship with.
+   Values are taken from the Breeze colour scheme so the app sits in the same
+   family as the software it follows. */
 :root {
-  --bg-app: #0e0e11;
-  --bg-panel: #16161b;
-  --bg-raised: #1d1d24;
-  --bg-input: #101014;
-  --bg-track: #131318;
+  --bg-app: #232629;        /* Base: lists, timeline background */
+  --bg-panel: #31363b;      /* Window: panels and toolbars */
+  --bg-raised: #3b4045;     /* Button */
+  --bg-input: #232629;
+  --bg-track: #2a2e32;      /* Alternate base: track lanes */
 
-  --border: #2a2a33;
-  --border-strong: #3a3a46;
+  --border: #3f4549;
+  --border-strong: #545b60;
 
-  --text: #e8e8ef;
-  --text-muted: #9a9aab;
-  --text-faint: #6b6b7c;
+  --text: #fcfcfc;
+  --text-muted: #a1a9b1;
+  --text-faint: #7f8c8d;
 
-  --accent: #6c8cff;
-  --accent-dim: #3d4f99;
-  --warn: #f0b400;
-  --danger: #ff5c5c;
-  --ok: #4ec98a;
+  --accent: #3daee9;        /* The KDE blue. Selection, focus, active tool. */
+  --accent-dim: #2980b9;
+  --warn: #f67400;
+  --danger: #da4453;
+  --ok: #27ae60;
 
-  --clip-video: #3a5bb8;
-  --clip-audio: #2f7a5e;
-  --clip-image: #7a4fa8;
-  --clip-text: #a87a2f;
+  /* Kdenlive track colours: video reads cool, audio reads green. */
+  --clip-video: #5a7a96;
+  --clip-audio: #6a9a5a;
+  --clip-image: #8e6a96;
+  --clip-text: #b08d57;
+  --playhead: #cc0000;
 
   --space-1: 4px;
   --space-2: 8px;
@@ -30,35 +34,35 @@
   --space-4: 16px;
   --space-5: 24px;
 
-  --radius-sm: 3px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
+  /* Breeze corners are nearly square; rounded cards read as web, not as a tool. */
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
 
-  --font: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
-  /* Mono is reserved for measurement — timecode, frame counts — never as decoration. */
-  --font-mono: 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
+  --font: 'Noto Sans', 'Segoe UI', system-ui, sans-serif;
+  /* Mono is reserved for measurement — timecode, frame counts — never decoration. */
+  --font-mono: 'Noto Sans Mono', 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
 
-  /* Type roles, named for the job they do. Steps are far enough apart to read
-     as different roles at a glance, which a uniform ramp never achieves. */
-  --fs-caption: 10px;   /* section + group headers, all caps */
-  --fs-meta: 11px;      /* asset metadata, clip duration */
-  --fs-body: 12px;      /* field labels, values, controls */
-  --fs-control: 12.5px; /* toolbar buttons */
-  --fs-data: 13px;      /* inline timecode */
-  --fs-title: 15px;     /* project name */
-  --fs-transport: 19px; /* the transport timecode, the one number you hunt for */
+  /* Type roles, named for the job they do. Noto Sans runs slightly larger than
+     Segoe at the same pixel size, so the ramp sits one step tighter. */
+  --fs-caption: 10px;
+  --fs-meta: 11px;
+  --fs-body: 12px;
+  --fs-control: 12px;
+  --fs-data: 13px;
+  --fs-title: 14px;
+  --fs-transport: 20px;
 
   --fw-regular: 400;
   --fw-medium: 500;
   --fw-semibold: 600;
 
-  /* Caps headers need tracking or they clot; data needs none. */
-  --tracking-caps: 0.09em;
-  --tracking-tight: -0.01em;
+  --tracking-caps: 0.08em;
+  --tracking-tight: 0;
 
-  --ruler-height: 26px;
-  --track-header-width: 156px;
-  --transport-height: 44px;
+  --ruler-height: 28px;
+  --track-header-width: 168px;
+  --transport-height: 42px;
 }
 
 /* Numbers that change in place must not reflow their neighbours. */
@@ -558,7 +562,9 @@ select:focus {
 /* --- Timeline ------------------------------------------------------------ */
 
 .timeline {
-  height: 300px;
+  height: auto;
+  flex: 1;
+  min-height: 0;
   display: grid;
   grid-template-columns: var(--track-header-width) 1fr;
   background: var(--bg-panel);
@@ -583,7 +589,6 @@ select:focus {
   flex: none;
 }
 .track-header {
-  height: 56px;
   border-bottom: 1px solid var(--border);
   padding: var(--space-1) var(--space-2);
   display: flex;
@@ -665,7 +670,6 @@ select:focus {
 }
 
 .lane {
-  height: 56px;
   border-bottom: 1px solid var(--border);
   position: relative;
   background: var(--bg-track);
@@ -738,7 +742,7 @@ select:focus {
   top: 0;
   bottom: 0;
   width: 1px;
-  background: var(--danger);
+  background: var(--playhead);
   pointer-events: none;
   z-index: 4;
 }
@@ -749,7 +753,7 @@ select:focus {
   left: -5px;
   border-left: 5px solid transparent;
   border-right: 5px solid transparent;
-  border-top: 8px solid var(--danger);
+  border-top: 8px solid var(--playhead);
 }
 
 /* --- Status bar ---------------------------------------------------------- */
@@ -1241,4 +1245,73 @@ input[type='range']:hover::-webkit-slider-thumb {
   background-size: auto 46%;
   background-position: left 72%;
   background-repeat: repeat-x;
+}
+
+/* --- Splitters ----------------------------------------------------------- */
+
+/* Breeze splitters are a thin line that thickens on approach; the hit area is
+   larger than the line so the grab is forgiving. */
+.splitter {
+  background: var(--border);
+  flex: none;
+  position: relative;
+  z-index: 6;
+}
+.splitter.vertical {
+  width: 1px;
+  cursor: col-resize;
+}
+.splitter.horizontal {
+  height: 1px;
+  cursor: row-resize;
+}
+.splitter::after {
+  content: '';
+  position: absolute;
+}
+.splitter.vertical::after {
+  inset: 0 -3px;
+}
+.splitter.horizontal::after {
+  inset: -3px 0;
+}
+.splitter:hover,
+.splitter:focus-visible {
+  background: var(--accent);
+  outline: none;
+}
+
+.timeline-shell {
+  overflow: hidden;
+}
+
+/* Rename in place, as Kdenlive does on a double-click. */
+.track-rename {
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  padding: 1px var(--space-1);
+  height: 18px;
+}
+.track-header,
+.lane {
+  transition: height 90ms ease-out;
+}
+
+/* Minor ruler graduations: present but silent, so the labelled ticks still lead. */
+.ruler .tick.minor {
+  border-left-color: var(--border);
+  opacity: 0.5;
+  top: 60%;
+}
+
+/* The work zone reads as a band under the ruler, the way Kdenlive shows it. */
+.work-zone {
+  position: absolute;
+  bottom: 0;
+  height: 5px;
+  background: var(--accent);
+  opacity: 0.85;
+  pointer-events: none;
 }

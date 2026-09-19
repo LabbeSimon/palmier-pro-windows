@@ -28,6 +28,7 @@ import {
   type Timeline,
   type TimelineMarker,
   type Track,
+  type WorkZone,
   type Transform,
   type Transition,
   type TransitionKind,
@@ -212,6 +213,7 @@ export function emptyTimeline(name: string, fps = 30, width = 1920, height = 108
       { id: newId(), type: 'audio', name: 'A1', muted: false, hidden: false, locked: false, volume: 1, clips: [] },
     ],
     markers: [],
+    workZone: null,
   }
 }
 
@@ -1720,6 +1722,62 @@ export function shiftClips(
       changed: true,
       summary: `Shifted ${ids.length} clip(s) by ${delta} frame(s) on "${track.name ?? track.type}"`,
       affectedIds: ids,
+      warnings: [],
+    },
+  }
+}
+
+/**
+ * Sets the work zone (Kdenlive's in/out points). Passing null clears it, which
+ * means "the whole timeline" rather than "an empty zone".
+ */
+export function setWorkZone(
+  project: Project,
+  args: { timelineId?: string; inFrame?: number | null; outFrame?: number | null },
+): MutationResult {
+  const target = requireTimeline(project, args.timelineId)
+  const clearing = args.inFrame === null || args.outFrame === null
+
+  let zone: WorkZone | null = null
+  if (!clearing) {
+    const inFrame = args.inFrame === undefined ? (target.workZone?.inFrame ?? 0) : requireFrame(args.inFrame, 'inFrame')
+    const outFrame =
+      args.outFrame === undefined
+        ? (target.workZone?.outFrame ?? timelineTotalFrames(target))
+        : requireFrame(args.outFrame, 'outFrame')
+    if (outFrame <= inFrame) {
+      throw new OpError('invalid_argument', `outFrame (${outFrame}) must be after inFrame (${inFrame})`)
+    }
+    zone = { inFrame, outFrame }
+  }
+
+  const same = JSON.stringify(zone) === JSON.stringify(target.workZone ?? null)
+  if (same) {
+    return {
+      project,
+      receipt: {
+        operation: 'set_work_zone',
+        changed: false,
+        summary: 'The work zone already matched the request',
+        affectedIds: [target.id],
+        warnings: [],
+      },
+    }
+  }
+
+  const next = clone(project)
+  const timeline = next.timelines.find((t) => t.id === target.id)!
+  timeline.workZone = zone
+
+  return {
+    project: touch(next),
+    receipt: {
+      operation: 'set_work_zone',
+      changed: true,
+      summary: zone
+        ? `Work zone set to frames ${zone.inFrame}-${zone.outFrame}`
+        : 'Work zone cleared; the whole timeline is in play',
+      affectedIds: [target.id],
       warnings: [],
     },
   }

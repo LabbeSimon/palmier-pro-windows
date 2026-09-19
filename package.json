@@ -16,11 +16,12 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "fetch:ffmpeg": "node scripts/fetch-ffmpeg.mjs win32-x64",
-    "package:win": "npm run fetch:ffmpeg && npm run build && electron-builder --win --x64",
-    "package:win:portable": "npm run fetch:ffmpeg && npm run build && electron-builder --win portable --x64",
-    "package:win:zip": "npm run fetch:ffmpeg && npm run build && electron-builder --win zip --x64",
+    "package:win": "npm run fetch:ffmpeg && npm run fetch:fonts && npm run build && electron-builder --win --x64",
+    "package:win:portable": "npm run fetch:ffmpeg && npm run fetch:fonts && npm run build && electron-builder --win portable --x64",
+    "package:win:zip": "npm run fetch:ffmpeg && npm run fetch:fonts && npm run build && electron-builder --win zip --x64",
     "fetch:ffmpeg:linux": "node scripts/fetch-ffmpeg.mjs linux-x64",
-    "package:linux": "npm run fetch:ffmpeg:linux && npm run build && electron-builder --linux --x64"
+    "package:linux": "npm run fetch:ffmpeg:linux && npm run fetch:fonts && npm run build && electron-builder --linux --x64",
+    "fetch:fonts": "node scripts/fetch-fonts.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
@@ -70,6 +71,13 @@
           "filter": [
             "**/*"
           ]
+        },
+        {
+          "from": "resources/fonts",
+          "to": "fonts",
+          "filter": [
+            "**/*"
+          ]
         }
       ],
       "icon": "resources/icon.ico"
@@ -106,6 +114,13 @@
         {
           "from": "resources/ffmpeg/linux-x64",
           "to": "ffmpeg",
+          "filter": [
+            "**/*"
+          ]
+        },
+        {
+          "from": "resources/fonts",
+          "to": "fonts",
           "filter": [
             "**/*"
           ]

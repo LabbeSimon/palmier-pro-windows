@@ -6,3 +6,4 @@ resources/ffmpeg/
 *.log
 .DS_Store
 palmier-win-cache/
+resources/fonts/

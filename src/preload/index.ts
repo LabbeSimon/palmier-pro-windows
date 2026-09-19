@@ -59,6 +59,7 @@ const api = {
     setProjectSettings: (args: unknown) => invoke<Receipt>('ops:setProjectSettings', args),
     removeAssets: (args: unknown) => invoke<Receipt>('ops:removeAssets', args),
     shiftClips: (args: unknown) => invoke<Receipt>('ops:shiftClips', args),
+    setWorkZone: (args: unknown) => invoke<Receipt>('ops:setWorkZone', args),
     addEffect: (args: unknown) => invoke<Receipt>('ops:addEffect', args),
     removeEffect: (args: unknown) => invoke<Receipt>('ops:removeEffect', args),
     setEffectParams: (args: unknown) => invoke<Receipt>('ops:setEffectParams', args),

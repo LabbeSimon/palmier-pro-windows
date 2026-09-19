@@ -1,7 +1,9 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, protocol, shell } from 'electron'
+import { pathToFileURL } from 'node:url'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { readFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 
 import { activeTimeline, type MediaAsset, type Project } from '../core/model.js'
 import * as ops from '../core/ops.js'
@@ -219,6 +221,7 @@ handle('ops:setActiveTimeline', (args) => store.apply((p) => ops.setActiveTimeli
 handle('ops:setProjectSettings', (args) => store.apply((p) => ops.setProjectSettings(p, args)))
 handle('ops:removeAssets', (args) => store.apply((p) => ops.removeAssets(p, args.assetIds)))
 handle('ops:shiftClips', (args) => store.apply((p) => ops.shiftClips(p, args)))
+handle('ops:setWorkZone', (args) => store.apply((p) => ops.setWorkZone(p, args)))
 handle('ops:addEffect', (args) => store.apply((p) => ops.addEffect(p, args)))
 handle('ops:removeEffect', (args) => store.apply((p) => ops.removeEffect(p, args)))
 handle('ops:setEffectParams', (args) => store.apply((p) => ops.setEffectParams(p, args)))
@@ -357,7 +360,29 @@ async function startMCP(): Promise<void> {
   window?.webContents.send('mcp:status', mcpStatus)
 }
 
+/**
+ * Fonts live outside the asar (they are extraResources) and the renderer cannot
+ * read arbitrary file:// URLs under contextIsolation. A tiny scheme keeps the
+ * stylesheet identical in dev and in the packaged app.
+ */
+function registerFontProtocol(): void {
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+  const packaged = resourcesPath ? join(resourcesPath, 'fonts') : null
+  const dev = join(__dirname, '../../resources/fonts')
+
+  protocol.handle('font', (request) => {
+    const name = basename(decodeURIComponent(new URL(request.url).hostname + new URL(request.url).pathname))
+    for (const root of [packaged, dev]) {
+      if (!root) continue
+      const candidate = join(root, name)
+      if (existsSync(candidate)) return net.fetch(pathToFileURL(candidate).toString())
+    }
+    return new Response('font not found', { status: 404 })
+  })
+}
+
 app.whenReady().then(async () => {
+  registerFontProtocol()
   createWindow()
   await startMCP()
 

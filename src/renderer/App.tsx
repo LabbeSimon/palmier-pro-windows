@@ -9,6 +9,7 @@ import { EffectsPanel } from './components/EffectsPanel.js'
 import { Inspector } from './components/Inspector.js'
 import { MediaPanel } from './components/MediaPanel.js'
 import { Monitors } from './components/Monitors.js'
+import { Splitter } from './components/Splitter.js'
 import { StatusBar } from './components/StatusBar.js'
 import { TimelineView, type TimelineTool } from './components/TimelineView.js'
 import { Toolbar } from './components/Toolbar.js'
@@ -16,6 +17,22 @@ import { useEditor, usePreviewFrame } from './state.js'
 
 type LeftTab = 'media' | 'effects'
 type RightTab = 'inspector' | 'mixer'
+
+/** Dock size remembered across sessions, like a Qt application's layout. */
+function useStickySize(key: string, fallback: number): [number, (value: number) => void] {
+  const [size, setSize] = useState(() => {
+    const stored = Number(window.localStorage.getItem(key))
+    return Number.isFinite(stored) && stored > 0 ? stored : fallback
+  })
+  const update = useCallback(
+    (value: number) => {
+      setSize(value)
+      window.localStorage.setItem(key, String(Math.round(value)))
+    },
+    [key],
+  )
+  return [size, update]
+}
 
 export function App() {
   const { state, run, setStatus, setExportProgress } = useEditor()
@@ -28,6 +45,10 @@ export function App() {
   const [snapEnabled, setSnapEnabled] = useState(true)
   const [leftTab, setLeftTab] = useState<LeftTab>('media')
   const [rightTab, setRightTab] = useState<RightTab>('inspector')
+  // Dock sizes survive restarts, the way a Qt application remembers its layout.
+  const [leftWidth, setLeftWidth] = useStickySize('dock.left', 280)
+  const [rightWidth, setRightWidth] = useStickySize('dock.right', 300)
+  const [timelineHeight, setTimelineHeight] = useStickySize('dock.timeline', 300)
 
   const { project, timeline } = state
   const timelineId = timeline?.id
@@ -231,12 +252,16 @@ export function App() {
         onSplit={splitAtPlayhead}
         onDelete={deleteSelection}
         onAddText={addTextAtPlayhead}
+        onAddMarker={addMarkerAtPlayhead}
         onExport={() => void exportVideo()}
         onCancelExport={() => void window.palmier.render.cancel()}
         onSelectTimeline={(id) => void run(() => window.palmier.ops.setActiveTimeline({ timelineId: id }))}
       />
 
-      <div className="workspace">
+      <div
+        className="workspace"
+        style={{ gridTemplateColumns: `${leftWidth}px auto minmax(0, 1fr) auto ${rightWidth}px` }}
+      >
         <div className="panel side">
           <div className="tabs" role="tablist">
             <button
@@ -271,6 +296,15 @@ export function App() {
           )}
         </div>
 
+        <Splitter
+          orientation="vertical"
+          size={leftWidth}
+          min={200}
+          max={520}
+          onResize={setLeftWidth}
+          label="Resize the left dock"
+        />
+
         <Monitors
           timeline={timeline}
           frame={clampedPlayhead}
@@ -282,6 +316,16 @@ export function App() {
           clipAsset={project.assets.find((a) => a.id === selectedAssetId) ?? null}
           onSeek={setPlayhead}
           onSplit={splitAtPlayhead}
+        />
+
+        <Splitter
+          orientation="vertical"
+          size={rightWidth}
+          min={220}
+          max={560}
+          inverted
+          onResize={setRightWidth}
+          label="Resize the right dock"
         />
 
         <div className="panel side">
@@ -356,7 +400,18 @@ export function App() {
         </div>
       </div>
 
+      <Splitter
+        orientation="horizontal"
+        size={timelineHeight}
+        min={160}
+        max={640}
+        inverted
+        onResize={setTimelineHeight}
+        label="Resize the timeline"
+      />
+
       <TimelineView
+        height={timelineHeight}
         timeline={timeline}
         assets={project.assets}
         thumbnails={state.thumbnails}
@@ -370,6 +425,9 @@ export function App() {
         onZoom={setPixelsPerFrame}
         onSetTool={setTool}
         onToggleSnap={() => setSnapEnabled((on) => !on)}
+        onSetWorkZone={(inFrame, outFrame) =>
+          void run(() => window.palmier.ops.setWorkZone({ timelineId, inFrame, outFrame }))
+        }
         onMoveClip={(clipId, startFrame, trackId) =>
           void run(() => window.palmier.ops.moveClips({ timelineId, moves: [{ clipId, startFrame, trackId }] }))
         }
@@ -386,6 +444,9 @@ export function App() {
           if (!track) return
           void run(() => window.palmier.ops.setTrackFlags({ timelineId, trackId, [field]: !track[field] }))
         }}
+        onRenameTrack={(trackId, name) =>
+          void run(() => window.palmier.ops.setTrackFlags({ timelineId, trackId, name }))
+        }
         onAddTrack={(type) => void run(() => window.palmier.ops.addTrack({ timelineId, type }))}
       />
 

@@ -316,3 +316,24 @@ describe('shiftClips (spacer)', () => {
     expect(() => ops.shiftClips(locked, { trackId, fromFrame: 0, deltaFrames: 30 })).toThrow(/locked/)
   })
 })
+
+describe('work zone', () => {
+  it('stores in/out and refuses an inverted range', () => {
+    const p = ops.emptyProject('T')
+    const set = ops.setWorkZone(p, { inFrame: 20, outFrame: 110 })
+    expect(set.project.timelines[0]!.workZone).toEqual({ inFrame: 20, outFrame: 110 })
+    expect(() => ops.setWorkZone(p, { inFrame: 100, outFrame: 40 })).toThrow(/must be after/)
+  })
+
+  it('clears to null, meaning the whole timeline', () => {
+    const set = ops.setWorkZone(ops.emptyProject('T'), { inFrame: 5, outFrame: 50 }).project
+    const cleared = ops.setWorkZone(set, { inFrame: null, outFrame: null })
+    expect(cleared.receipt.changed).toBe(true)
+    expect(cleared.project.timelines[0]!.workZone).toBeNull()
+  })
+
+  it('reports an honest no-op when the zone already matches', () => {
+    const set = ops.setWorkZone(ops.emptyProject('T'), { inFrame: 5, outFrame: 50 }).project
+    expect(ops.setWorkZone(set, { inFrame: 5, outFrame: 50 }).receipt.changed).toBe(false)
+  })
+})

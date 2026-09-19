@@ -175,6 +175,15 @@ export interface TimelineMarker {
   color: string
 }
 
+/**
+ * The work zone (Kdenlive's "zone", in/out points on the ruler). Renders can be
+ * limited to it, and it is what a preview render covers.
+ */
+export interface WorkZone {
+  inFrame: number
+  outFrame: number
+}
+
 export interface Timeline {
   id: string
   name: string
@@ -183,6 +192,8 @@ export interface Timeline {
   height: number
   tracks: Track[]
   markers: TimelineMarker[]
+  /** Null when the whole timeline is the zone. */
+  workZone: WorkZone | null
 }
 
 export interface MediaAsset {

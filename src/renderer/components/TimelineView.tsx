@@ -24,6 +24,8 @@ import {
 export type TimelineTool = 'select' | 'razor' | 'spacer'
 
 interface Props {
+  /** Dock height in pixels, driven by the splitter above. */
+  height: number
   timeline: Timeline
   assets: MediaAsset[]
   thumbnails: Record<string, string>
@@ -40,10 +42,12 @@ interface Props {
   onRazor: (trackId: string, frame: number) => void
   onSpacer: (trackId: string, fromFrame: number, deltaFrames: number) => void
   onToggleTrack: (trackId: string, field: 'muted' | 'hidden' | 'locked') => void
+  onRenameTrack: (trackId: string, name: string) => void
   onAddTrack: (type: 'video' | 'audio') => void
   onZoom: (pixelsPerFrame: number) => void
   onSetTool: (tool: TimelineTool) => void
   onToggleSnap: () => void
+  onSetWorkZone: (inFrame: number | null, outFrame: number | null) => void
 }
 
 const MIN_PPF = 0.02
@@ -76,6 +80,18 @@ export function TimelineView(props: Props) {
   const [dropTrackId, setDropTrackId] = useState<string | null>(null)
   const [spacerFrom, setSpacerFrom] = useState<{ trackId: string; frame: number } | null>(null)
   const [snapLine, setSnapLine] = useState<number | null>(null)
+  const [renaming, setRenaming] = useState<string | null>(null)
+  // Track height is a view preference, not project data, so it lives here and
+  // persists locally rather than travelling inside the saved project.
+  const [laneHeight, setLaneHeight] = useState(() => {
+    const stored = Number(window.localStorage.getItem('timeline.laneHeight'))
+    return Number.isFinite(stored) && stored >= 36 ? stored : 56
+  })
+  const setLaneHeightPersisted = useCallback((value: number) => {
+    const clamped = Math.min(160, Math.max(36, Math.round(value)))
+    setLaneHeight(clamped)
+    window.localStorage.setItem('timeline.laneHeight', String(clamped))
+  }, [])
 
   const contentFrames = Math.max(
     timelineDisplayFrames(timeline) + Math.round(600 / pixelsPerFrame),
@@ -146,6 +162,20 @@ export function TimelineView(props: Props) {
     return out
   }, [timeline.fps, pixelsPerFrame, contentFrames])
 
+  /** Unlabelled minor ticks between the labelled ones, as Kdenlive draws them. */
+  const minorTicks = useMemo(() => {
+    const major = tickStepFrames(timeline.fps, pixelsPerFrame)
+    const step = major / 5
+    if (step * pixelsPerFrame < 6) return []
+    const out: number[] = []
+    for (let frame = 0; frame <= contentFrames; frame += step) {
+      if (Math.abs(frame % major) > 0.5) out.push(frame)
+    }
+    return out
+  }, [timeline.fps, pixelsPerFrame, contentFrames])
+
+  const zone = timeline.workZone
+
   const assetName = useCallback(
     (mediaRef: string) => props.assets.find((a) => a.id === mediaRef)?.name ?? null,
     [props.assets],
@@ -173,7 +203,7 @@ export function TimelineView(props: Props) {
   }
 
   return (
-    <div className="timeline-shell">
+    <div className="timeline-shell" style={{ height: props.height }}>
       <div className="timeline-tools">
         <div className="tool-group" role="group" aria-label="Timeline tool">
           <button
@@ -209,6 +239,32 @@ export function TimelineView(props: Props) {
           Snap
         </button>
 
+        <span className="divider" />
+
+        {/* Kdenlive's zone in/out, set from the playhead. */}
+        <button
+          className="icon-btn wide"
+          title="Set zone start at the playhead (I)"
+          onClick={() => props.onSetWorkZone(playhead, zone ? Math.max(zone.outFrame, playhead + 1) : null)}
+        >
+          In
+        </button>
+        <button
+          className="icon-btn wide"
+          title="Set zone end at the playhead (O)"
+          onClick={() => props.onSetWorkZone(zone ? Math.min(zone.inFrame, playhead - 1) : 0, playhead)}
+        >
+          Out
+        </button>
+        <button
+          className="icon-btn wide"
+          disabled={!zone}
+          title="Clear the work zone"
+          onClick={() => props.onSetWorkZone(null, null)}
+        >
+          Clear
+        </button>
+
         <span className="spacer" />
 
         <span className="tool-hint">
@@ -236,14 +292,53 @@ export function TimelineView(props: Props) {
         <div className="track-headers">
           <div className="ruler-spacer">
             <span>{timeline.tracks.length} tracks</span>
+            <button
+              className="icon-btn"
+              title="Shorter tracks"
+              onClick={() => setLaneHeightPersisted(laneHeight - 12)}
+            >
+              <IconZoomOut />
+            </button>
+            <button
+              className="icon-btn"
+              title="Taller tracks"
+              onClick={() => setLaneHeightPersisted(laneHeight + 12)}
+            >
+              <IconZoomIn />
+            </button>
           </div>
 
           {displayTracks.map((track) => (
-            <div className={`track-header${track.locked ? ' locked' : ''}`} key={track.id}>
+            <div
+              className={`track-header${track.locked ? ' locked' : ''}`}
+              key={track.id}
+              style={{ height: laneHeight }}
+            >
               <div className="row">
-                <span className="label" title={track.name ?? track.type}>
-                  {track.name ?? track.type}
-                </span>
+                {renaming === track.id ? (
+                  <input
+                    className="track-rename"
+                    defaultValue={track.name ?? track.type}
+                    autoFocus
+                    onBlur={(event) => {
+                      const name = event.target.value.trim()
+                      if (name && name !== track.name) props.onRenameTrack(track.id, name)
+                      setRenaming(null)
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') event.currentTarget.blur()
+                      if (event.key === 'Escape') setRenaming(null)
+                    }}
+                  />
+                ) : (
+                  <span
+                    className="label"
+                    title={`${track.name ?? track.type} — double-click to rename`}
+                    onDoubleClick={() => setRenaming(track.id)}
+                  >
+                    {track.name ?? track.type}
+                  </span>
+                )}
                 <span className="count">{track.clips.length}</span>
               </div>
               <div className="row">
@@ -297,11 +392,24 @@ export function TimelineView(props: Props) {
                 if (event.buttons === 1) scrubTo(event.clientX)
               }}
             >
+              {minorTicks.map((frame) => (
+                <div className="tick minor" key={`m${frame}`} style={{ left: Math.round(frame * pixelsPerFrame) }} />
+              ))}
               {ticks.map((tick) => (
                 <div className="tick" key={tick.frame} style={{ left: Math.round(tick.frame * pixelsPerFrame) }}>
                   {tick.label}
                 </div>
               ))}
+              {zone ? (
+                <div
+                  className="work-zone"
+                  title={`Work zone ${framesToTimecode(zone.inFrame, timeline.fps)} → ${framesToTimecode(zone.outFrame, timeline.fps)}`}
+                  style={{
+                    left: Math.round(zone.inFrame * pixelsPerFrame),
+                    width: Math.max(2, Math.round((zone.outFrame - zone.inFrame) * pixelsPerFrame)),
+                  }}
+                />
+              ) : null}
               {timeline.markers.map((marker) => (
                 <div
                   className="marker"
@@ -316,6 +424,7 @@ export function TimelineView(props: Props) {
               <div
                 className={`lane${dropTrackId === track.id ? ' drop' : ''}${track.locked ? ' locked' : ''}`}
                 key={track.id}
+                style={{ height: laneHeight }}
                 onDragOver={(event) => {
                   const types = event.dataTransfer.types
                   if (!types.includes('application/x-palmier-asset') && !types.includes('application/x-palmier-clip')) {
