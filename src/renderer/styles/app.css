@@ -1294,10 +1294,8 @@ input[type='range']:hover::-webkit-slider-thumb {
   padding: 1px var(--space-1);
   height: 18px;
 }
-.track-header,
-.lane {
-  transition: height 90ms ease-out;
-}
+/* No transition on track height: animating it relayouts every lane at once, and
+   Kdenlive changes track height instantly anyway. */
 
 /* Minor ruler graduations: present but silent, so the labelled ticks still lead. */
 .ruler .tick.minor {
