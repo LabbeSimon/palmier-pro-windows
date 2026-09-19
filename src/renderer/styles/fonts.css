@@ -4,31 +4,31 @@
 
 @font-face {
   font-family: 'Noto Sans';
-  src: url('font://NotoSans-Regular.ttf') format('truetype');
+  src: url('font://local/NotoSans-Regular.ttf') format('truetype');
   font-weight: 400;
   font-display: block;
 }
 @font-face {
   font-family: 'Noto Sans';
-  src: url('font://NotoSans-Medium.ttf') format('truetype');
+  src: url('font://local/NotoSans-Medium.ttf') format('truetype');
   font-weight: 500;
   font-display: block;
 }
 @font-face {
   font-family: 'Noto Sans';
-  src: url('font://NotoSans-SemiBold.ttf') format('truetype');
+  src: url('font://local/NotoSans-SemiBold.ttf') format('truetype');
   font-weight: 600;
   font-display: block;
 }
 @font-face {
   font-family: 'Noto Sans';
-  src: url('font://NotoSans-Bold.ttf') format('truetype');
+  src: url('font://local/NotoSans-Bold.ttf') format('truetype');
   font-weight: 700;
   font-display: block;
 }
 @font-face {
   font-family: 'Noto Sans Mono';
-  src: url('font://NotoSansMono-Regular.ttf') format('truetype');
+  src: url('font://local/NotoSansMono-Regular.ttf') format('truetype');
   font-weight: 400;
   font-display: block;
 }

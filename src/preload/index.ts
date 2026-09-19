@@ -15,6 +15,17 @@ export type IpcResult<T> =
   | { ok: true; value: T }
   | { ok: false; code: string; message: string; details?: string }
 
+/** State of the playable timeline proxy. */
+export interface PreviewInfo {
+  fingerprint: string
+  ready: boolean
+  rendering: boolean
+  url?: string
+  startFrame?: number
+  totalFrames?: number
+  fps?: number
+}
+
 export interface RenderProgress {
   frame: number
   totalFrames: number
@@ -81,6 +92,13 @@ const api = {
       invoke<{ cancelled: boolean; outputPath?: string }>('render:export', args),
     cancel: () => invoke<{ cancelled: boolean }>('render:cancel'),
     onProgress: (listener: (progress: RenderProgress) => void) => subscribe('render:progress', listener),
+  },
+  preview: {
+    state: () => invoke<PreviewInfo>('preview:state'),
+    render: () => invoke<PreviewInfo>('preview:render'),
+    cancel: () => invoke<{ cancelled: boolean }>('preview:cancel'),
+    onProgress: (listener: (progress: RenderProgress) => void) => subscribe('preview:progress', listener),
+    onDone: (listener: () => void) => subscribe('preview:done', listener),
   },
   files: {
     /**

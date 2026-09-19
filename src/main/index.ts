@@ -5,16 +5,27 @@ import { dirname, join } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 
-import { activeTimeline, type MediaAsset, type Project } from '../core/model.js'
+import { activeTimeline, timelineTotalFrames, type MediaAsset, type Project } from '../core/model.js'
 import * as ops from '../core/ops.js'
 import { OpError, type Receipt } from '../core/ops.js'
 import { FFmpegError, ffmpegVersion, generateThumbnail, probeAsset, renderAssetFrame, renderFrame, renderTimeline, type RenderHandle } from './media/ffmpeg.js'
 import { buildMenu } from './menu.js'
+import { existingPreview, fingerprintTimeline, renderPreview, type PreviewJob } from './media/preview.js'
 import { MCPServer, DEFAULT_MCP_PORT } from './mcp/server.js'
 import { basename } from 'node:path'
 import { cacheDirFor, isProjectFolder, loadProject, ProjectStore, saveProject } from './project/store.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
+
+/**
+ * Must run before `app.whenReady`. A `<video>` refuses a custom scheme that is
+ * not registered as a stream, and a stylesheet refuses a font from one that is
+ * not standard — both fail silently, which is why this is easy to miss.
+ */
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'preview', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: false } },
+  { scheme: 'font', privileges: { standard: true, secure: true, supportFetchAPI: true } },
+])
 
 const store = new ProjectStore()
 let mcp: MCPServer | null = null
@@ -25,6 +36,7 @@ let mcpStatus: { running: boolean; endpoint: string | null; error: string | null
 }
 let window: BrowserWindow | null = null
 let activeExport: RenderHandle | null = null
+let activePreview: PreviewJob | null = null
 
 // --- Window ---------------------------------------------------------------
 
@@ -286,6 +298,61 @@ handle('render:assetFrame', async (args: { assetId: string; seconds: number }) =
   return `data:image/jpeg;base64,${data.toString('base64')}`
 })
 
+/** Current proxy state, so the UI knows whether playback is possible and fresh. */
+handle('preview:state', () => {
+  const project = store.project
+  const timeline = activeTimeline(project)
+  const existing = existingPreview(project, timeline, cacheDirFor(project.path))
+  return {
+    fingerprint: fingerprintTimeline(project, timeline),
+    ready: existing !== null,
+    rendering: activePreview !== null,
+    ...(existing
+      ? {
+          url: `preview://local/${basename(existing.path)}`,
+          startFrame: existing.startFrame,
+          totalFrames: existing.totalFrames,
+          fps: existing.fps,
+        }
+      : {}),
+  }
+})
+
+handle('preview:render', async () => {
+  if (activePreview) throw new OpError('refused', 'a preview render is already running')
+  const project = store.project
+  const timeline = activeTimeline(project)
+  if (timelineTotalFrames(timeline) === 0) {
+    throw new OpError('refused', 'the timeline is empty; there is nothing to preview')
+  }
+
+  const job = renderPreview(project, timeline, cacheDirFor(project.path), (progress) => {
+    window?.webContents.send('preview:progress', progress)
+  })
+  activePreview = job
+  try {
+    const state = await job.promise
+    return {
+      ready: true,
+      rendering: false,
+      fingerprint: state.fingerprint,
+      url: `preview://local/${basename(state.path)}`,
+      startFrame: state.startFrame,
+      totalFrames: state.totalFrames,
+      fps: state.fps,
+    }
+  } finally {
+    activePreview = null
+    window?.webContents.send('preview:done')
+  }
+})
+
+handle('preview:cancel', () => {
+  if (!activePreview) return { cancelled: false }
+  activePreview.cancel()
+  return { cancelled: true }
+})
+
 handle('render:export', async (args: { outputPath?: string; quality?: 'draft' | 'balanced' | 'high' }) => {
   if (activeExport) throw new OpError('refused', 'an export is already running; cancel it first')
 
@@ -370,14 +437,25 @@ function registerFontProtocol(): void {
   const packaged = resourcesPath ? join(resourcesPath, 'fonts') : null
   const dev = join(__dirname, '../../resources/fonts')
 
+  // Preview proxies live in the project cache; the player reads them here.
+  // The file name goes in the PATH, never the host: a standard scheme lowercases
+  // its host, which silently breaks any name with capitals.
+  protocol.handle('preview', (request) => {
+    const name = basename(decodeURIComponent(new URL(request.url).pathname))
+    if (!name) return new Response('no preview named', { status: 400 })
+    const candidate = join(cacheDirFor(store.project.path), name)
+    if (!existsSync(candidate)) return new Response(`preview ${name} not found`, { status: 404 })
+    return net.fetch(pathToFileURL(candidate).toString())
+  })
+
   protocol.handle('font', (request) => {
-    const name = basename(decodeURIComponent(new URL(request.url).hostname + new URL(request.url).pathname))
+    const name = basename(decodeURIComponent(new URL(request.url).pathname))
     for (const root of [packaged, dev]) {
       if (!root) continue
       const candidate = join(root, name)
       if (existsSync(candidate)) return net.fetch(pathToFileURL(candidate).toString())
     }
-    return new Response('font not found', { status: 404 })
+    return new Response(`font ${name} not found`, { status: 404 })
   })
 }
 
@@ -397,5 +475,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   activeExport?.cancel()
+  activePreview?.cancel()
   void mcp?.stop()
 })

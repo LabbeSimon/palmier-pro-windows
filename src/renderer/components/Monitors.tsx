@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 
 import type { MediaAsset, Timeline } from '../../core/model.js'
 import { framesToTimecode } from '../../core/timecode.js'
+import { ProjectMonitor } from './ProjectMonitor.js'
 import { Transport } from './Transport.js'
+import type { PlayerState } from '../usePlayer.js'
 
 interface Props {
   timeline: Timeline
@@ -14,8 +16,13 @@ interface Props {
   empty: boolean
   /** Asset shown in the clip monitor; null when nothing is picked in the bin. */
   clipAsset: MediaAsset | null
+  player: PlayerState
   onSeek: (frame: number) => void
   onSplit: () => void
+  onSetPlaying: (playing: boolean) => void
+  onRenderPreview: () => void
+  onCancelRender: () => void
+  onPlaybackError: (message: string) => void
 }
 
 type Monitor = 'project' | 'clip'
@@ -57,11 +64,11 @@ export function Monitors(props: Props) {
         </button>
       </div>
 
-      <div className="preview">
-        {showClip ? (
-          props.clipAsset ? (
+      {showClip ? (
+        <div className="preview">
+          {props.clipAsset ? (
             clipFrame.image ? (
-              <img src={clipFrame.image} alt={props.clipAsset.name} />
+              <img src={props.clipAsset ? clipFrame.image : undefined} alt={props.clipAsset.name} />
             ) : (
               <p className="placeholder">{clipFrame.error ?? 'Loading the source…'}</p>
             )
@@ -71,32 +78,27 @@ export function Monitors(props: Props) {
               <br />
               Select a file in the project bin to inspect it here.
             </p>
-          )
-        ) : props.empty ? (
-          <p className="placeholder">
-            The timeline is empty.
-            <br />
-            Drag media from the bin onto a track, or ask an agent over MCP.
-          </p>
-        ) : props.error ? (
-          <p className="placeholder error">
-            Preview failed
-            <br />
-            <span className="detail">{props.error}</span>
-          </p>
-        ) : props.image ? (
-          <img src={props.image} alt={`Frame ${props.frame}`} />
-        ) : (
-          <p className="placeholder">Rendering the first frame…</p>
-        )}
-
-        {(showClip ? clipFrame.busy : props.busy) ? <span className="badge busy">Rendering</span> : null}
-        {showClip ? (
-          props.clipAsset ? <span className="badge tc">{clipSeconds.toFixed(2)} s</span> : null
-        ) : props.empty ? null : (
-          <span className="badge tc">{framesToTimecode(props.frame, props.timeline.fps)}</span>
-        )}
-      </div>
+          )}
+          {clipFrame.busy ? <span className="badge busy">Rendering</span> : null}
+          {props.clipAsset ? <span className="badge tc">{clipSeconds.toFixed(2)} s</span> : null}
+        </div>
+      ) : (
+        <ProjectMonitor
+          timeline={props.timeline}
+          frame={props.frame}
+          totalFrames={props.totalFrames}
+          player={props.player}
+          stillImage={props.image}
+          stillBusy={props.busy}
+          stillError={props.error}
+          empty={props.empty}
+          onSeek={props.onSeek}
+          onSetPlaying={props.onSetPlaying}
+          onRenderPreview={props.onRenderPreview}
+          onCancelRender={props.onCancelRender}
+          onPlaybackError={props.onPlaybackError}
+        />
+      )}
 
       {showClip ? (
         <div className="transport">
@@ -122,8 +124,11 @@ export function Monitors(props: Props) {
           timeline={props.timeline}
           frame={props.frame}
           totalFrames={props.totalFrames}
+          playing={props.player.playing}
+          canPlay={props.player.fresh}
           onSeek={props.onSeek}
           onSplit={props.onSplit}
+          onTogglePlay={() => props.onSetPlaying(!props.player.playing)}
         />
       )}
     </div>

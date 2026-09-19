@@ -1313,3 +1313,58 @@ input[type='range']:hover::-webkit-slider-thumb {
   opacity: 0.85;
   pointer-events: none;
 }
+
+/* --- Player -------------------------------------------------------------- */
+
+.preview video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  background: #000;
+}
+
+/* A bar under the monitor that states, in words, whether what you see can be
+   played — the badge alone was too easy to miss. */
+.preview-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-top: 1px solid var(--border);
+  background: var(--bg-app);
+  font-size: var(--fs-meta);
+  flex: none;
+  min-height: 28px;
+}
+.preview-bar .ready { color: var(--ok); }
+.preview-bar .building { color: var(--accent); }
+.preview-bar .stale { color: var(--text-muted); }
+.preview-bar button {
+  margin-left: auto;
+  font-size: var(--fs-meta);
+  padding: 1px var(--space-2);
+}
+
+.preview .badge.mode {
+  top: var(--space-2);
+  left: var(--space-2);
+  font-family: var(--font);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semibold);
+}
+.preview .badge.mode.live {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.preview-bar .proxy-note {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.preview-bar .dropped {
+  color: var(--warn);
+  font-variant-numeric: tabular-nums;
+}

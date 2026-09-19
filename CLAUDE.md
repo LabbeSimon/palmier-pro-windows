@@ -57,15 +57,27 @@ Fait et vérifié :
 Reste ouvert sur ce bloc : les docks sont redimensionnables mais pas encore
 **détachables ni réarrangeables** comme les vrais docks Qt.
 
-### Bloc 2 — Lecture temps réel  ⬜
+### Bloc 2 — Lecture temps réel  ✅ (19/09/2026)
 
-Aujourd'hui le preview est image par image via FFmpeg. C'est la limite la plus
-handicapante à l'usage.
+Approche retenue : rendre la timeline en **proxy 540p** puis le lire dans un
+vrai lecteur vidéo, comme le *timeline preview rendering* de Kdenlive. Rendre
+image par image coûtait ~300 ms/frame, soit un diaporama.
 
-- [ ] Lecteur avec bouton play/pause réel, barre d'espace
-- [ ] Pré-rendu en cache des segments visibles
-- [ ] Son synchronisé avec l'image
-- [ ] Indicateur de frames sautées
+- [x] Lecteur play/pause réel, barre d'espace, bouton transport
+- [x] Proxy mis en cache, indexé par empreinte de la timeline ; les anciens
+      sont purgés au-delà de 4
+- [x] Son synchronisé — il est dans le proxy, donc calé par construction
+- [x] Indicateur de frames sautées + résolution du proxy affichée
+- [x] `Ctrl+Shift+Entrée` construit le proxy, comme dans Kdenlive
+
+Le proxy n'est **jamais** reconstruit automatiquement : encoder à chaque frappe
+brûlerait la machine. L'UI dit en clair quand ce qu'on regarde est périmé.
+
+**Deux bugs trouvés en vérifiant, qui rendaient l'app muette sans rien dire :**
+la CSP `default-src 'self'` bloquait `font://` et `preview://` — Noto Sans n'a
+jamais chargé avant ce correctif — et les schémas déclarés *standard*
+normalisent l'hôte en minuscules, donc lire le nom de fichier depuis l'hôte
+échouait. Le nom passe désormais par le **chemin**.
 
 ### Bloc 3 — Keyframes  ⬜
 

@@ -27,6 +27,7 @@ export type MenuCommand =
   | 'timeline:addVideoTrack'
   | 'timeline:addAudioTrack'
   | 'timeline:toggleSnap'
+  | 'timeline:buildPreview'
   | 'timeline:zoomIn'
   | 'timeline:zoomOut'
   | 'timeline:zoomFit'
@@ -83,6 +84,12 @@ export function buildMenu(window: BrowserWindow): Menu {
         { label: 'Add audio track', click: send('timeline:addAudioTrack') },
         { type: 'separator' },
         { label: 'Snap to edges', accelerator: 'N', click: send('timeline:toggleSnap') },
+        { type: 'separator' },
+        {
+          label: 'Build timeline preview',
+          accelerator: 'CmdOrCtrl+Shift+Return',
+          click: send('timeline:buildPreview'),
+        },
         { type: 'separator' },
         { label: 'Go to start', accelerator: 'Home', click: send('playhead:start') },
         { label: 'Go to end', accelerator: 'End', click: send('playhead:end') },

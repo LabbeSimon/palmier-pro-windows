@@ -14,6 +14,7 @@ import { StatusBar } from './components/StatusBar.js'
 import { TimelineView, type TimelineTool } from './components/TimelineView.js'
 import { Toolbar } from './components/Toolbar.js'
 import { useEditor, usePreviewFrame } from './state.js'
+import { usePlayer } from './usePlayer.js'
 
 type LeftTab = 'media' | 'effects'
 type RightTab = 'inspector' | 'mixer'
@@ -69,7 +70,10 @@ export function App() {
 
   const totalFrames = timeline ? timelineTotalFrames(timeline) : 0
   const clampedPlayhead = Math.min(playhead, Math.max(0, totalFrames - 1))
-  const preview = usePreviewFrame(project, clampedPlayhead, totalFrames > 0)
+  const player = usePlayer(project, timeline)
+  // The still frame is only fetched when no proxy can be played; otherwise the
+  // video element is the picture and a per-frame FFmpeg call would be waste.
+  const preview = usePreviewFrame(project, clampedPlayhead, totalFrames > 0 && !player.state.fresh)
 
   // --- Actions ------------------------------------------------------------
 
@@ -172,6 +176,7 @@ export function App() {
         case 'timeline:addVideoTrack': void run(() => window.palmier.ops.addTrack({ timelineId, type: 'video' })); break
         case 'timeline:addAudioTrack': void run(() => window.palmier.ops.addTrack({ timelineId, type: 'audio' })); break
         case 'timeline:toggleSnap': setSnapEnabled((on) => !on); break
+        case 'timeline:buildPreview': void player.render(); break
         case 'timeline:zoomIn': setPixelsPerFrame((z) => Math.min(40, z * 1.5)); break
         case 'timeline:zoomOut': setPixelsPerFrame((z) => Math.max(0.02, z / 1.5)); break
         case 'timeline:zoomFit': setPixelsPerFrame(totalFrames > 0 ? Math.max(0.02, 1200 / totalFrames) : 2); break
@@ -208,6 +213,11 @@ export function App() {
       if (event.ctrlKey || event.metaKey || event.altKey) return
 
       switch (event.key) {
+        case ' ':
+          event.preventDefault()
+          if (player.state.fresh) player.setPlaying(!player.state.playing)
+          else void player.render()
+          break
         case 'ArrowLeft':
           event.preventDefault()
           setPlayhead((f) => Math.max(0, f - (event.shiftKey ? 10 : 1)))
@@ -220,7 +230,7 @@ export function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [totalFrames])
+  }, [totalFrames, player])
 
   if (!project || !timeline) {
     return <div className="empty">Loading project…</div>
@@ -314,8 +324,13 @@ export function App() {
           error={preview.error}
           empty={totalFrames === 0}
           clipAsset={project.assets.find((a) => a.id === selectedAssetId) ?? null}
+          player={player.state}
           onSeek={setPlayhead}
           onSplit={splitAtPlayhead}
+          onSetPlaying={player.setPlaying}
+          onRenderPreview={() => void player.render()}
+          onCancelRender={() => void player.cancel()}
+          onPlaybackError={(message) => setStatus({ text: `Playback: ${message}`, tone: 'error' })}
         />
 
         <Splitter

@@ -1,13 +1,17 @@
 import type { Timeline } from '../../core/model.js'
 import { framesToTimecode } from '../../core/timecode.js'
-import { IconEnd, IconNextFrame, IconPrevFrame, IconSplit, IconStart } from './Icons.js'
+import { IconEnd, IconNextFrame, IconPause, IconPlay, IconPrevFrame, IconSplit, IconStart } from './Icons.js'
 
 interface Props {
   timeline: Timeline
   frame: number
   totalFrames: number
+  playing: boolean
+  /** False until a proxy exists; the play button says why it is disabled. */
+  canPlay: boolean
   onSeek: (frame: number) => void
   onSplit: () => void
+  onTogglePlay: () => void
 }
 
 /**
@@ -35,6 +39,14 @@ export function Transport(props: Props) {
         </button>
         <button className="icon-btn" title="Previous frame (←)" onClick={() => seek(frame - 1)}>
           <IconPrevFrame />
+        </button>
+        <button
+          className={`icon-btn${props.playing ? ' on' : ''}`}
+          title={props.canPlay ? 'Play / pause (Space)' : 'Build the preview first to play'}
+          disabled={!props.canPlay}
+          onClick={props.onTogglePlay}
+        >
+          {props.playing ? <IconPause /> : <IconPlay />}
         </button>
         <button className="icon-btn" title="Next frame (→)" onClick={() => seek(frame + 1)}>
           <IconNextFrame />
