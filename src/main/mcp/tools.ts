@@ -31,6 +31,7 @@ import { OpError, type Receipt } from '../../core/ops.js'
 import { framesToTimecode } from '../../core/timecode.js'
 import { probeAsset, renderFrame, renderTimeline } from '../media/ffmpeg.js'
 import { buildProxies, canProxy, PROXY_WIDTH } from '../media/proxy.js'
+import { CONFIDENT, syncByAudio, SyncError } from '../media/sync.js'
 import { formatSrt, formatVtt, parseSubtitles } from '../../core/subtitles.js'
 import { framesToSeconds, secondsToFrames } from '../../core/timecode.js'
 import { readFile, writeFile } from 'node:fs/promises'
@@ -115,6 +116,14 @@ function timelineSnapshot(project: Project, timeline: Timeline): Record<string, 
           ? { transitionIn: { kind: clip.transitionIn.kind, durationFrames: clip.transitionIn.durationFrames } }
           : {}),
         ...(clip.textContent ? { textContent: clip.textContent } : {}),
+        ...(clip.multicam
+          ? {
+              multicam: {
+                activeIndex: clip.multicam.activeIndex,
+                angles: clip.multicam.angles.map((angle, index) => ({ index, name: angle.name })),
+              },
+            }
+          : {}),
       })),
     })),
     workZone: timeline.workZone,
@@ -846,6 +855,137 @@ export const TOOLS: ToolDefinition[] = [
             timelineId: args.timeline_id,
             inFrame: args.in_frame,
             outFrame: args.out_frame,
+          }),
+        ),
+      ),
+  },
+  {
+    name: 'sync_angles',
+    description:
+      'Measure how far apart several recordings of the same scene started, by correlating their loudness ' +
+      'envelopes. Returns one offset per asset in seconds, plus a confidence: below 0.5 the peak is not clearly ' +
+      'above the noise and the answer should be treated as a guess. This only measures — nothing is changed.',
+    inputSchema: object(
+      { asset_ids: arr(str('Media asset id.'), 'At least two assets, all with audio.') },
+      ['asset_ids'],
+    ),
+    handler: async (args, ctx) => {
+      const assets = (args.asset_ids as string[]).map((id) => {
+        const found = ctx.store.project.assets.find((a) => a.id === id)
+        if (!found) throw new OpError('not_found', `media asset ${id} is not in this project`)
+        return found
+      })
+      try {
+        const results = await syncByAudio(assets)
+        return {
+          reference: assets[0]!.name,
+          offsets: results.map((result) => ({
+            ...result,
+            name: assets.find((a) => a.id === result.assetId)!.name,
+            confident: result.confidence >= CONFIDENT,
+          })),
+        }
+      } catch (error) {
+        if (error instanceof SyncError) throw new OpError('refused', error.message)
+        throw error
+      }
+    },
+  },
+  {
+    name: 'create_multicam',
+    description:
+      'Place a multicam clip: one angle on the timeline that remembers the others, so cuts between cameras are ' +
+      'ordinary cuts on an ordinary track. With auto_sync the offsets are measured from the audio first. ' +
+      'Switching angle changes the picture only — the sound stays on the first angle, as a multicam edit should.',
+    inputSchema: object(
+      {
+        timeline_id: str('Defaults to the active timeline.'),
+        angles: arr(
+          object(
+            {
+              asset_id: str('Media asset for this camera.'),
+              offset_frames: int('Source frames to skip so this angle lines up. Default 0.'),
+            },
+            ['asset_id'],
+          ),
+          'At least two angles, in the order they should be numbered.',
+        ),
+        auto_sync: bool('Measure the offsets from the audio instead of using the given ones.'),
+        start_frame: int('Where the multicam clip starts on the timeline. Default 0.'),
+        duration_frames: int('Defaults to the whole stretch where every angle has footage.'),
+        track_id: str('Track to place it on. Defaults to the first free video track.'),
+      },
+      ['angles'],
+    ),
+    handler: async (args, ctx) => {
+      const timeline = resolveTimeline(ctx.store.project, args.timeline_id)
+      let angles = (args.angles as { asset_id: string; offset_frames?: number }[]).map((angle) => ({
+        assetId: angle.asset_id,
+        offsetFrames: angle.offset_frames ?? 0,
+      }))
+      const measured: Record<string, unknown>[] = []
+
+      if (args.auto_sync) {
+        const assets = angles.map((angle) => {
+          const found = ctx.store.project.assets.find((a) => a.id === angle.assetId)
+          if (!found) throw new OpError('not_found', `media asset ${angle.assetId} is not in this project`)
+          return found
+        })
+        try {
+          const results = await syncByAudio(assets)
+          angles = angles.map((angle) => {
+            const result = results.find((r) => r.assetId === angle.assetId)!
+            measured.push({
+              name: assets.find((a) => a.id === angle.assetId)!.name,
+              offsetSeconds: result.offsetSeconds,
+              confidence: result.confidence,
+            })
+            return { ...angle, offsetFrames: secondsToFrames(result.offsetSeconds, timeline.fps) }
+          })
+        } catch (error) {
+          if (error instanceof SyncError) throw new OpError('refused', error.message)
+          throw error
+        }
+      }
+
+      const receipt = ctx.store.apply((p) =>
+        ops.createMulticam(p, {
+          timelineId: timeline.id,
+          angles,
+          startFrame: args.start_frame,
+          durationFrames: args.duration_frames,
+          trackId: args.track_id,
+        }),
+      )
+      return receiptPayload(receipt, {
+        angles: angles.map((angle, index) => ({ index, assetId: angle.assetId, offsetFrames: angle.offsetFrames })),
+        ...(measured.length > 0 ? { measured } : {}),
+      })
+    },
+  },
+  {
+    name: 'switch_angle',
+    description:
+      'Cut to another camera. With a frame the clip is cut there and only the part after changes, which is how a ' +
+      'multicam edit is built; without one the whole clip changes. Refused with the frame numbers when the ' +
+      'chosen angle has no footage covering that stretch.',
+    inputSchema: object(
+      {
+        timeline_id: str('Defaults to the active timeline.'),
+        clip_id: str('A multicam clip. get_timeline reports which clips have angles.'),
+        angle_index: int('Zero-based index into the angle set.'),
+        frame: int('Timeline frame to cut at. Omit to change the whole clip.'),
+      },
+      ['clip_id', 'angle_index'],
+    ),
+    handler: (args, ctx) =>
+      receiptPayload(
+        ctx.store.apply((p) =>
+          ops.switchAngle(p, {
+            timelineId: args.timeline_id,
+            clipId: args.clip_id,
+            angleIndex: args.angle_index,
+            frame: args.frame,
           }),
         ),
       ),

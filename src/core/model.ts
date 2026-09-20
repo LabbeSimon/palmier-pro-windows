@@ -140,6 +140,32 @@ export interface Transition {
   durationFrames: number
 }
 
+/** One camera in a multicam set, with its offset against the sync point. */
+export interface MulticamAngle {
+  assetId: string
+  name: string
+  /**
+   * Source frames to skip so this angle lines up with the others.
+   *
+   * Positive means the camera started rolling earlier than the reference, so
+   * its footage has to be entered further in.
+   */
+  offsetFrames: number
+}
+
+/**
+ * The angle set behind a clip that came from a multicam edit.
+ *
+ * It rides along on every piece the clip is cut into, so switching angle later
+ * on one cut does not lose the others.
+ */
+export interface Multicam {
+  id: string
+  angles: MulticamAngle[]
+  /** Index into `angles` currently showing on this piece. */
+  activeIndex: number
+}
+
 export interface Clip {
   id: string
   /** Asset id, or timeline id when sourceClipType is 'sequence'. */
@@ -179,6 +205,8 @@ export interface Clip {
   keyframes: KeyframeMap
   /** Transition into this clip, overlapping its predecessor. */
   transitionIn: Transition | null
+  /** Angle set, when this clip came from a multicam edit. */
+  multicam?: Multicam | null
 }
 
 export interface Track {

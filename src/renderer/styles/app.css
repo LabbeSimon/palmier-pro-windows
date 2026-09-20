@@ -1967,3 +1967,75 @@ input[type='range']:hover::-webkit-slider-thumb {
   border: 1px solid var(--accent-dim);
   border-radius: var(--radius-sm);
 }
+
+/* --- Multicam -------------------------------------------------------------
+   Every camera at the moment the playhead is on: a thumbnail of the head of
+   each file would say nothing about what that camera was doing on this line. */
+
+.angle-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+.angle {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.angle:hover:not(:disabled) { border-color: var(--border-strong); }
+.angle.on { border-color: var(--accent); }
+.angle:disabled { opacity: 0.5; cursor: default; }
+
+.angle-frame {
+  position: relative;
+  display: block;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.angle-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.angle-loading {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: var(--text-faint);
+}
+
+.angle-index {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  padding: 0 4px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  color: var(--text);
+  background: rgb(0 0 0 / 0.65);
+  border-radius: var(--radius-sm);
+}
+
+.angle-name {
+  font-size: var(--fs-caption);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.angle.on .angle-name { color: var(--text); }

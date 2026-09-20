@@ -38,14 +38,17 @@ licence: TypeScript, Electron and FFmpeg, written from scratch.
 - **Proxy clips** — one button transcodes every oversized video to a 640-wide all-intra copy
   so scrubbing stays responsive on a laptop. Preview and playback read the proxy; **an export
   always reads the original**, so this costs nothing in the delivered file.
+- **Multicam** — pick several angles in the bin, and the offsets are measured from their audio
+  before the clip is placed. Press 1-9 to cut to a camera at the playhead; the sound stays on the
+  first angle. A cut is an ordinary cut, so the result is a timeline anyone can open and trim.
 - **Track lock, mute, hide** and a per-track gain fader in a decibel-calibrated mixer.
 - **Dual monitors** — the clip monitor shows raw source from the bin, the project monitor
   shows the composited edit.
 - **Native menu** with real accelerators; every item routes to the same handler the UI
   buttons use, so there is no second implementation to drift.
-- **MCP server** on `http://127.0.0.1:19789/mcp`, 43 tools, bound to loopback only.
+- **MCP server** on `http://127.0.0.1:19789/mcp`, 46 tools, bound to loopback only.
 - **Export** — H.264 / AAC MP4 with live progress and cancellation.
-- **Built-in agent** — a conversation panel that edits through the same 43 tools the MCP
+- **Built-in agent** — a conversation panel that edits through the same 46 tools the MCP
   server exposes, so its work lands on the same undo stack as yours. Needs your own Anthropic
   API key, which is encrypted with the OS keystore.
 - **Action journal** — every edit with its source (you, the built-in agent, or an MCP client),
@@ -70,6 +73,7 @@ src/main/      Electron main process.
   project/store.ts  The single owner of mutable state: undo history, action journal, atomic save.
   media/ffmpeg.ts   Process management: probe, thumbnails, render, progress, cancellation.
   media/proxy.ts    Editing stand-ins: all-intra transcode, cache keyed by size and mtime.
+  media/sync.ts     Multicam sync: loudness-envelope correlation, with a confidence.
   mcp/server.ts     JSON-RPC 2.0 over Streamable HTTP.
   mcp/tools.ts      The tool surface.
   agent/            The built-in agent: Anthropic client, tool loop, key storage.
@@ -92,11 +96,11 @@ Two rules hold the design together:
 `set_track_flags` · `add_clips` · `remove_clips` · `split_clips` · `move_clips` ·
 `set_clip_properties` · `add_texts` · `update_text` · `list_animatable` · `set_keyframe` ·
 `move_keyframe` · `remove_keyframe` · `trim_clip` · `group_clips` · `ungroup_clips` ·
-`set_work_zone` · `build_proxies` · `get_subtitles` · `import_subtitles` ·
-`export_subtitles` · `add_markers` · `capture_frame` · `export_project` · `undo` ·
-`list_effects` · `apply_effect` · `get_clip_effects` · `set_effect` · `set_effect_curve` ·
-`remove_effect` · `reorder_effect` · `list_transitions` · `add_transition` ·
-`remove_transition`
+`set_work_zone` · `sync_angles` · `create_multicam` · `switch_angle` · `build_proxies` ·
+`get_subtitles` · `import_subtitles` · `export_subtitles` · `add_markers` · `capture_frame`
+· `export_project` · `undo` · `list_effects` · `apply_effect` · `get_clip_effects` ·
+`set_effect` · `set_effect_curve` · `remove_effect` · `reorder_effect` · `list_transitions`
+· `add_transition` · `remove_transition`
 
 Tools refuse rather than improvise. An overlapping placement, a duration the media cannot
 supply, or a fade longer than its clip returns an actionable error and changes nothing —
@@ -120,7 +124,7 @@ success-shaped response, and they do not create an undo step.
 ```bash
 npm install
 npm run dev        # Electron with HMR on the renderer
-npm test           # 301 tests: domain, keyframes, render graph, MCP, agent and FFmpeg end-to-end
+npm test           # 321 tests: domain, keyframes, render graph, MCP, agent and FFmpeg end-to-end
 npm run typecheck
 ```
 

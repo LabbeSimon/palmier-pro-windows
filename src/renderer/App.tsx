@@ -42,7 +42,12 @@ export function App() {
   const { state, run, refresh, setStatus, setExportProgress } = useEditor()
   const [playhead, setPlayhead] = useState(0)
   const [selectedClipIds, setSelectedClipIds] = useState<string[]>([])
-  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null)
+  /**
+   * Bin selection. The last entry is the "current" one the clip monitor shows;
+   * the rest exist so several angles can be picked for a multicam set.
+   */
+  const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([])
+  const selectedAssetId = selectedAssetIds.at(-1) ?? null
   const [pixelsPerFrame, setPixelsPerFrame] = useState(2)
   const [exporting, setExporting] = useState(false)
   const [tool, setTool] = useState<TimelineTool>('select')
@@ -65,6 +70,12 @@ export function App() {
     const ids = new Set(selectedClipIds)
     return timeline.tracks.flatMap((track) => track.clips.filter((clip) => ids.has(clip.id)))
   }, [timeline, selectedClipIds])
+
+  /** The selected clip, when it is one and it has angles. */
+  const multicamClip = useMemo<Clip | null>(
+    () => (selectedClips.length === 1 && selectedClips[0]!.multicam ? selectedClips[0]! : null),
+    [selectedClips],
+  )
 
   // An agent editing over MCP can delete a clip the UI still has selected.
   useEffect(() => {
@@ -134,6 +145,45 @@ export function App() {
       setStatus({ text: `${receipt?.summary ?? 'Imported'}${unusable}`, tone: unusable ? 'info' : 'ok' })
     })()
   }, [refresh, setStatus])
+
+  /**
+   * Builds a multicam set from the bin selection, measuring the offsets first.
+   *
+   * The measurement is reported with its confidence rather than applied
+   * silently: a weak peak means the cameras may not be lined up, and finding
+   * that out from a wrong cut much later is far worse than a sentence here.
+   */
+  const createMulticam = useCallback(
+    (assetIds: string[]) => {
+      void (async () => {
+        setStatus({ text: `Listening to ${assetIds.length} angles…`, tone: 'info' })
+        const sync = await window.palmier.multicam.sync(assetIds)
+        if (!sync.ok) {
+          setStatus({ text: `${sync.code}: ${sync.message}`, tone: 'error' })
+          return
+        }
+        const fps = timeline?.fps ?? 30
+        const angles = sync.value.map((result) => ({
+          assetId: result.assetId,
+          offsetFrames: Math.round(result.offsetSeconds * fps),
+        }))
+        const unsure = sync.value.filter((result) => !result.confident)
+
+        const receipt = await run(() =>
+          window.palmier.ops.createMulticam({ timelineId, angles, startFrame: playhead }),
+        )
+        if (receipt && unsure.length > 0) {
+          setStatus({
+            text:
+              `${receipt.summary} — but the sync is uncertain for ` +
+              `${unsure.map((result) => `${result.name} (${result.confidence})`).join(', ')}. Check a cut.`,
+            tone: 'info',
+          })
+        }
+      })()
+    },
+    [run, setStatus, timeline, timelineId, playhead],
+  )
 
   /** A fresh cue is two seconds long: enough to read, short enough to retime. */
   const addSubtitleAtPlayhead = useCallback(() => {
@@ -257,8 +307,30 @@ export function App() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement
-      if (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.isContentEditable) return
+      if (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'SELECT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable
+      ) {
+        return
+      }
       if (event.ctrlKey || event.metaKey || event.altKey) return
+
+      // 1-9 cut to that camera, the way every multicam editor works. Only when
+      // the selected clip has angles, so the keys stay free otherwise.
+      if (/^[1-9]$/.test(event.key) && multicamClip) {
+        event.preventDefault()
+        void run(() =>
+          window.palmier.ops.switchAngle({
+            timelineId,
+            clipId: multicamClip.id,
+            angleIndex: Number(event.key) - 1,
+            frame: playhead,
+          }),
+        )
+        return
+      }
 
       switch (event.key) {
         case ' ':
@@ -278,7 +350,7 @@ export function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [totalFrames, player])
+  }, [totalFrames, player, multicamClip, run, timelineId, playhead])
 
   if (!project || !timeline) {
     return <div className="empty">Loading project…</div>
@@ -352,8 +424,17 @@ export function App() {
             <MediaPanel
               assets={project.assets}
               thumbnails={state.thumbnails}
-              selectedAssetId={selectedAssetId}
-              onSelect={setSelectedAssetId}
+              selectedAssetIds={selectedAssetIds}
+              onSelect={(assetId, additive) =>
+                setSelectedAssetIds((current) =>
+                  additive
+                    ? current.includes(assetId)
+                      ? current.filter((id) => id !== assetId)
+                      : [...current, assetId]
+                    : [assetId],
+                )
+              }
+              onMulticam={createMulticam}
               onImport={() => void run(() => window.palmier.media.import())}
               onRemove={(assetId) => void run(() => window.palmier.ops.removeAssets({ assetIds: [assetId] }))}
               onError={(message) => setStatus({ text: message, tone: 'error' })}
@@ -477,6 +558,10 @@ export function App() {
               }
               onSetEffectParams={(clipId, effectId, params) =>
                 void run(() => window.palmier.ops.setEffectParams({ timelineId, clipId, effectId, params }))
+              }
+              playhead={clampedPlayhead}
+              onSwitchAngle={(clipId, angleIndex, frame) =>
+                void run(() => window.palmier.ops.switchAngle({ timelineId, clipId, angleIndex, frame }))
               }
               onSetEffectCurve={(clipId, effectId, channel, points) =>
                 void run(() =>

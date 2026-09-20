@@ -4,6 +4,7 @@ import { clipEndFrame, type Clip, type MediaAsset, type Timeline } from '../../c
 import type { ClipProperties } from '../../core/ops.js'
 import { framesToTimecode } from '../../core/timecode.js'
 import { EffectStack } from './EffectStack.js'
+import { MulticamPanel } from './MulticamPanel.js'
 import { isAnimated } from '../../core/keyframes.js'
 import type { CurvePoint } from '../../core/effects.js'
 
@@ -16,6 +17,9 @@ interface Props {
   onSetTimelineSettings: (settings: { fps?: number; width?: number; height?: number; name?: string }) => void
   onSetEffectParams: (clipId: string, effectId: string, params: Record<string, number>) => void
   onSetEffectCurve: (clipId: string, effectId: string, channel: string, points: CurvePoint[]) => void
+  /** Timeline playhead, so the angle grid can show each camera at this moment. */
+  playhead: number
+  onSwitchAngle: (clipId: string, angleIndex: number, frame: number) => void
   onToggleEffect: (clipId: string, effectId: string, enabled: boolean) => void
   onRemoveEffect: (clipId: string, effectId: string) => void
   onReorderEffect: (clipId: string, effectId: string, toIndex: number) => void
@@ -268,6 +272,16 @@ export function Inspector(props: Props) {
                 onCommit={(fadeOutFrames) => props.onApply({ fadeOutFrames: Math.round(fadeOutFrames) })}
               />
             </div>
+
+            {clip?.multicam ? (
+              <MulticamPanel
+                clip={clip}
+                timeline={timeline}
+                assets={props.assets}
+                frame={props.playhead}
+                onSwitch={(angleIndex, frame) => props.onSwitchAngle(clip.id, angleIndex, frame)}
+              />
+            ) : null}
 
             {clip ? (
               <EffectStack

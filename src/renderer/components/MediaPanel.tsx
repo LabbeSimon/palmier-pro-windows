@@ -5,8 +5,9 @@ import type { MediaAsset } from '../../core/model.js'
 interface Props {
   assets: MediaAsset[]
   thumbnails: Record<string, string>
-  selectedAssetId: string | null
-  onSelect: (assetId: string) => void
+  selectedAssetIds: string[]
+  onSelect: (assetId: string, additive: boolean) => void
+  onMulticam: (assetIds: string[]) => void
   onImport: () => void
   onRemove: (assetId: string) => void
   onError: (message: string) => void
@@ -35,6 +36,18 @@ export function MediaPanel(props: Props) {
         <span>{props.assets.length} file{props.assets.length === 1 ? '' : 's'}</span>
         <button onClick={props.onImport}>Import</button>
       </div>
+
+      {multicamCandidates(props).length >= 2 ? (
+        <div className="proxy-bar">
+          <span className="proxy-state">{multicamCandidates(props).length} angles selected</span>
+          <button
+            title="Line them up by their audio and place a multicam clip"
+            onClick={() => props.onMulticam(multicamCandidates(props))}
+          >
+            Multicam
+          </button>
+        </div>
+      ) : null}
 
       {proxies.state.total > 0 ? (
         <div className="proxy-bar">
@@ -78,19 +91,19 @@ export function MediaPanel(props: Props) {
           props.assets.map((asset) => (
             <div
               key={asset.id}
-              className={`asset${props.selectedAssetId === asset.id ? ' selected' : ''}`}
+              className={`asset${props.selectedAssetIds.includes(asset.id) ? ' selected' : ''}`}
               draggable
-              onClick={() => props.onSelect(asset.id)}
+              onClick={(event) => props.onSelect(asset.id, event.ctrlKey || event.metaKey)}
               onDragStart={(event) => {
                 event.dataTransfer.setData('application/x-palmier-asset', asset.id)
                 event.dataTransfer.effectAllowed = 'copy'
-                props.onSelect(asset.id)
+                props.onSelect(asset.id, false)
               }}
               onContextMenu={(event) => {
                 event.preventDefault()
                 props.onRemove(asset.id)
               }}
-              title={`${asset.path}\nRight-click to remove from the project`}
+              title={`${asset.path}\nCtrl-click to add to the selection · right-click to remove`}
             >
               <div
                 className="poster"
@@ -120,6 +133,14 @@ export function MediaPanel(props: Props) {
       </div>
     </div>
   )
+}
+
+/** Selected assets that could stand as multicam angles. */
+function multicamCandidates(props: Props): string[] {
+  return props.selectedAssetIds.filter((id) => {
+    const asset = props.assets.find((candidate) => candidate.id === id)
+    return asset !== undefined && (asset.type === 'video' || asset.type === 'audio') && asset.hasAudio
+  })
 }
 
 /**

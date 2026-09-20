@@ -90,6 +90,8 @@ const api = {
     removeTransition: (args: unknown) => invoke<Receipt>('ops:removeTransition', args),
     addSubtitles: (args: unknown) => invoke<Receipt>('ops:addSubtitles', args),
     setAssetProxies: (args: unknown) => invoke<Receipt>('ops:setAssetProxies', args),
+    createMulticam: (args: unknown) => invoke<Receipt>('ops:createMulticam', args),
+    switchAngle: (args: unknown) => invoke<Receipt>('ops:switchAngle', args),
   },
   agent: {
     settings: () =>
@@ -105,6 +107,12 @@ const api = {
     cancel: () => invoke<{ cancelled: boolean }>('agent:cancel'),
     clear: () => invoke<{ cleared: boolean }>('agent:clear'),
     onEvent: (listener: (event: AgentEvent) => void) => subscribe('agent:event', listener),
+  },
+  multicam: {
+    sync: (assetIds: string[]) =>
+      invoke<
+        { assetId: string; name: string; offsetSeconds: number; confidence: number; confident: boolean }[]
+      >('multicam:sync', assetIds),
   },
   proxies: {
     state: () =>

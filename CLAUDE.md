@@ -33,12 +33,12 @@ Fait et vérifié :
 - Import vidéo = image + son en clips liés
 - Glisser-déposer depuis l'explorateur
 - Double moniteur clip / projet, mixeur audio en dB
-- Barre de menus native, 43 outils MCP, bouton de connexion en un clic
+- Barre de menus native, 46 outils MCP, bouton de connexion en un clic
 - Logo intégré : `.ico` multi-tailles dans l'exe, `.png` Linux
 - Keyframes : domaine, rendu, éditeur, MCP
 - Agent intégré + journal d'actions annulables une par une
-- Sous-titres SRT/VTT, étalonnage courbes + roues
-- 301 tests verts ; exe Windows signé non, mais construit et livré
+- Sous-titres SRT/VTT, étalonnage courbes + roues, proxys, multicam
+- 321 tests verts ; exe Windows signé non, mais construit et livré
 
 ---
 
@@ -140,7 +140,7 @@ Non vérifié : l'aller-retour réel avec l'API Anthropic. Le décodage du flux,
 la boucle d'outils, les refus et le plafond de tours sont couverts par 16 tests
 avec un transport bouchonné, mais aucune requête n'a été envoyée pour de vrai.
 
-### Bloc 5 — Fonctions Kdenlive manquantes  🟡 (7/8)
+### Bloc 5 — Fonctions Kdenlive manquantes  ✅ (20/09/2026)
 
 - [x] **Groupes de clips** — `Ctrl+G` / `Ctrl+Shift+G`, liseré ambre sur les
       clips groupés ; un groupe fusionne au lieu de s'imbriquer
@@ -165,7 +165,18 @@ avec un transport bouchonné, mais aucune requête n'a été envoyée pour de vr
       piste sous-titres, donc déplaçable et rognable comme le reste. Le parseur
       encaisse BOM, CRLF, points au lieu de virgules, index absents, balises
       `<i>` — et **nomme** les lignes qu'il n'a pas pu utiliser
-- [ ] Multicam
+- [x] **Multicam** : angles choisis dans le chutier, **décalages mesurés à
+      l'audio** (corrélation d'enveloppes de sonie, avec une confiance), puis
+      un clip multicam sur la timeline. Touches **1-9** pour couper vers une
+      caméra au curseur ; le son reste sur le premier angle, comme un vrai
+      montage multicam. Une coupe reste une coupe ordinaire — le projet reste
+      lisible et retouchable sans outil spécial.
+
+      Deux choses mesurées, pas supposées : un signal **périodique** corrèle
+      aussi bien à chaque multiple de sa période (mon premier signal de test
+      n'avait donc pas de bonne réponse), et un **recouvrement trop court**
+      gonfle le score — avec un plancher à 1 s la mesure tombait 6 s à côté.
+      Plancher porté à la moitié de la prise la plus courte.
 
 ### Bloc 6 — Distribution  ⬜
 

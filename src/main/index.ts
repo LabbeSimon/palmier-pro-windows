@@ -12,6 +12,7 @@ import { FFmpegError, ffmpegVersion, generateThumbnail, probeAsset, renderAssetF
 import { buildMenu } from './menu.js'
 import { existingPreview, fingerprintTimeline, renderPreview, type PreviewJob } from './media/preview.js'
 import { buildProxies, canProxy, existingProxy, PROXY_WIDTH, type ProxyJob } from './media/proxy.js'
+import { CONFIDENT, syncByAudio, SyncError } from './media/sync.js'
 import { MCPServer, DEFAULT_MCP_PORT } from './mcp/server.js'
 import { TOOLS_BY_NAME } from './mcp/tools.js'
 import { AgentSession, type AgentEvent } from './agent/session.js'
@@ -263,6 +264,8 @@ const UI_OPS: Record<string, (project: Project, args: any) => ops.MutationResult
   removeTransition: ops.removeTransition,
   addSubtitles: ops.addSubtitles,
   setAssetProxies: ops.setAssetProxies,
+  createMulticam: ops.createMulticam,
+  switchAngle: ops.switchAngle,
 }
 
 for (const [name, operation] of Object.entries(UI_OPS)) {
@@ -342,6 +345,28 @@ handle('agent:cancel', () => {
 handle('agent:clear', () => {
   agent?.clear()
   return { cleared: true }
+})
+
+// --- Multicam -------------------------------------------------------------
+
+/** Measures offsets; applying them is a separate, undoable step. */
+handle('multicam:sync', async (assetIds: string[]) => {
+  const assets = assetIds.map((id) => {
+    const found = store.project.assets.find((a) => a.id === id)
+    if (!found) throw new OpError('not_found', `media asset ${id} is not in this project`)
+    return found
+  })
+  try {
+    const results = await syncByAudio(assets)
+    return results.map((result) => ({
+      ...result,
+      name: assets.find((a) => a.id === result.assetId)!.name,
+      confident: result.confidence >= CONFIDENT,
+    }))
+  } catch (error) {
+    if (error instanceof SyncError) throw new OpError('refused', error.message)
+    throw error
+  }
 })
 
 // --- Proxies --------------------------------------------------------------

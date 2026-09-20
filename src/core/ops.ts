@@ -24,6 +24,7 @@ import {
   type Crop,
   type Interpolation,
   type MediaAsset,
+  type MulticamAngle,
   type Project,
   type TextStyle,
   type Timeline,
@@ -1218,6 +1219,225 @@ export function splitClips(project: Project, args: SplitArgs): MutationResult {
       warnings: skipped.map((loc) => `clip ${loc.clip.id} does not cross frame ${frame}, left untouched`),
     },
   }
+}
+
+// --- Multicam -------------------------------------------------------------
+
+/**
+ * A multicam clip is an ordinary clip that remembers its other angles.
+ *
+ * Switching angle is a cut plus a retarget, which is exactly what a multicam
+ * edit is — so trimming, rippling and undo keep working with no special case,
+ * and the result is a normal timeline anyone can open and understand.
+ */
+export function createMulticam(
+  project: Project,
+  args: {
+    timelineId?: string
+    angles: { assetId: string; offsetFrames?: number }[]
+    startFrame?: number
+    durationFrames?: number
+    trackId?: string
+  },
+): MutationResult {
+  if (!Array.isArray(args.angles) || args.angles.length < 2) {
+    throw new OpError('invalid_argument', 'a multicam set needs at least two angles')
+  }
+  const target = requireTimeline(project, args.timelineId)
+  const startFrame = requireFrame(args.startFrame ?? 0, 'startFrame')
+
+  const angles: MulticamAngle[] = args.angles.map((spec, index) => {
+    const asset = project.assets.find((a) => a.id === spec.assetId)
+    if (!asset) throw new OpError('not_found', `angles[${index}]: media asset ${spec.assetId} is not in this project`)
+    if (asset.type !== 'video' && asset.type !== 'audio') {
+      throw new OpError('refused', `angles[${index}]: "${asset.name}" is a ${asset.type}, which cannot be an angle`)
+    }
+    const offsetFrames = Math.round(spec.offsetFrames ?? 0)
+    if (!Number.isFinite(offsetFrames) || offsetFrames < 0) {
+      throw new OpError('invalid_argument', `angles[${index}].offsetFrames must be zero or more`)
+    }
+    return { assetId: asset.id, name: asset.name, offsetFrames }
+  })
+
+  // The set can only run as long as its shortest angle, counted from the point
+  // where they all line up.
+  const available = angles.map((angle) => {
+    const asset = project.assets.find((a) => a.id === angle.assetId)!
+    return Math.max(0, secondsToFrames(asset.durationSeconds, target.fps) - angle.offsetFrames)
+  })
+  const overlap = Math.min(...available)
+  if (overlap <= 0) {
+    const shortest = angles[available.indexOf(overlap)]!
+    throw new OpError(
+      'refused',
+      `the angles do not overlap: "${shortest.name}" has nothing left after its ${shortest.offsetFrames}-frame offset`,
+    )
+  }
+
+  const durationFrames = args.durationFrames ? requireDuration(args.durationFrames, 'durationFrames') : overlap
+  if (durationFrames > overlap) {
+    throw new OpError(
+      'refused',
+      `the angles only overlap for ${overlap} frames, ${durationFrames} were asked for`,
+    )
+  }
+
+  const first = angles[0]!
+  const result = addClips(project, {
+    timelineId: target.id,
+    clips: [
+      {
+        assetId: first.assetId,
+        startFrame,
+        durationFrames,
+        trimStartFrame: first.offsetFrames,
+        ...(args.trackId ? { trackId: args.trackId } : {}),
+      },
+    ],
+  })
+
+  // The angle set is attached after placement so `addClips` keeps its single
+  // definition of where a clip may go and what it may overlap.
+  //
+  // Only the picture carries it. A multicam edit cuts between cameras over one
+  // chosen soundtrack — switching the sound at every cut is what makes an edit
+  // sound like it was made by a machine.
+  const next = clone(result.project)
+  const timeline = next.timelines.find((t) => t.id === target.id)!
+  const multicamId = newId()
+  const created: string[] = []
+  for (const clipId of result.receipt.affectedIds) {
+    const found = findClip(timeline, clipId)
+    if (!found || !isVisual(found.clip.mediaType)) continue
+    found.clip.multicam = { id: multicamId, angles, activeIndex: 0 }
+    created.push(clipId)
+  }
+
+  return {
+    project: touch(next),
+    receipt: {
+      operation: 'create_multicam',
+      changed: true,
+      summary: `Multicam with ${angles.length} angles, ${durationFrames} frames, starting on "${first.name}"`,
+      affectedIds: created,
+      warnings: [
+        ...(durationFrames < overlap
+          ? []
+          : [`Limited to ${overlap} frames, where every angle has footage.`]),
+        'Switching angle changes the picture only; the sound stays on the first angle.',
+      ],
+    },
+  }
+}
+
+/**
+ * Switches which angle a multicam clip shows, optionally from a frame onwards.
+ *
+ * Given a frame inside the clip it cuts there first, so the part before keeps
+ * the angle it had — which is how a multicam edit is actually built.
+ */
+export function switchAngle(
+  project: Project,
+  args: { timelineId?: string; clipId: string; angleIndex: number; frame?: number },
+): MutationResult {
+  const target = requireTimeline(project, args.timelineId)
+  const source = requireClip(target, args.clipId)
+  const multicam = source.clip.multicam
+  if (!multicam) {
+    throw new OpError('refused', `clip ${args.clipId} is not part of a multicam set`)
+  }
+  const angleIndex = Math.round(args.angleIndex)
+  const angle = multicam.angles[angleIndex]
+  if (!angle) {
+    throw new OpError(
+      'invalid_argument',
+      `angle ${args.angleIndex} does not exist (this set has ${multicam.angles.length}: ` +
+        `${multicam.angles.map((a, i) => `${i}=${a.name}`).join(', ')})`,
+    )
+  }
+
+  // Cutting first keeps this one operation, so undo puts back both halves.
+  let working = project
+  let clipId = args.clipId
+  if (args.frame !== undefined) {
+    const frame = requireFrame(args.frame, 'frame')
+    if (frame > source.clip.startFrame && frame < clipEndFrame(source.clip)) {
+      const split = splitClips(project, { timelineId: target.id, frame, clipIds: [args.clipId] })
+      working = split.project
+      const created = split.receipt.affectedIds.find((id) => id !== args.clipId)
+      if (created) clipId = created
+    }
+  }
+
+  const next = clone(working)
+  const timeline = next.timelines.find((t) => t.id === target.id)!
+  const loc = requireClip(timeline, clipId)
+  refuseIfLocked(loc.track, 'switching angles on its clips')
+  const clip = loc.clip
+  const current = clip.multicam!.angles[clip.multicam!.activeIndex]!
+
+  if (clip.multicam!.activeIndex === angleIndex) {
+    return {
+      project,
+      receipt: {
+        operation: 'switch_angle',
+        changed: false,
+        summary: `Already on "${angle.name}"`,
+        affectedIds: [],
+        warnings: [],
+      },
+    }
+  }
+
+  // Same moment in the synced timeline, expressed in the new angle's frames.
+  const syncRelative = clip.trimStartFrame - current.offsetFrames
+  const trimStartFrame = syncRelative + angle.offsetFrames
+  const asset = next.assets.find((a) => a.id === angle.assetId)
+  if (!asset) throw new OpError('not_found', `media asset ${angle.assetId} is no longer in the project`)
+
+  const availableSource = secondsToFrames(asset.durationSeconds, timeline.fps)
+  const needed = Math.round(clip.durationFrames * clip.speed)
+  if (trimStartFrame < 0 || trimStartFrame + needed > availableSource) {
+    throw new OpError(
+      'refused',
+      `"${angle.name}" has no footage for this stretch: it would need source frames ` +
+        `${trimStartFrame}-${trimStartFrame + needed} of ${availableSource}`,
+    )
+  }
+
+  clip.mediaRef = angle.assetId
+  clip.mediaType = asset.type
+  clip.sourceClipType = asset.type
+  clip.trimStartFrame = trimStartFrame
+  clip.trimEndFrame = Math.max(0, availableSource - trimStartFrame - needed)
+  clip.multicam!.activeIndex = angleIndex
+
+  return {
+    project: touch(next),
+    receipt: {
+      operation: 'switch_angle',
+      changed: true,
+      summary:
+        `Switched to "${angle.name}"` +
+        (clipId === args.clipId ? '' : ` from frame ${clip.startFrame}`),
+      affectedIds: [clipId],
+      warnings: [],
+    },
+  }
+}
+
+/** Every multicam piece on a timeline, grouped by the set it belongs to. */
+export function multicamSets(timeline: Timeline): Map<string, { clips: Clip[]; angles: MulticamAngle[] }> {
+  const sets = new Map<string, { clips: Clip[]; angles: MulticamAngle[] }>()
+  for (const track of timeline.tracks) {
+    for (const clip of track.clips) {
+      if (!clip.multicam) continue
+      const existing = sets.get(clip.multicam.id)
+      if (existing) existing.clips.push(clip)
+      else sets.set(clip.multicam.id, { clips: [clip], angles: clip.multicam.angles })
+    }
+  }
+  return sets
 }
 
 export interface MoveSpec {
