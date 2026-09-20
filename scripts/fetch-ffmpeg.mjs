@@ -11,9 +11,11 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, rmSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+const WINDOWS = process.platform === 'win32'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -53,26 +55,47 @@ mkdirSync(destination, { recursive: true })
 
 const archivePath = join(scratch, `ffmpeg.${build.archive}`)
 console.log(`Downloading ${build.url}`)
-execFileSync('curl', ['-fL', '--retry', '3', '-o', archivePath, build.url], { stdio: 'inherit' })
+// Node's own fetch rather than curl: this script runs on the Windows CI runner
+// too, and every external tool it needs is one more thing that is not there.
+const response = await fetch(build.url, { redirect: 'follow' })
+if (!response.ok) {
+  console.error(`download failed: HTTP ${response.status} ${response.statusText}`)
+  process.exit(1)
+}
+writeFileSync(archivePath, Buffer.from(await response.arrayBuffer()))
 
 console.log('Extracting')
-if (build.archive === 'zip') {
+if (build.archive === 'zip' && !WINDOWS) {
   execFileSync('unzip', ['-q', '-o', archivePath, '-d', scratch], { stdio: 'inherit' })
 } else {
+  // Windows ships bsdtar as `tar`, which reads zip as well as tar.xz. GNU tar
+  // on Linux cannot read zip, hence the split above.
   execFileSync('tar', ['-xf', archivePath, '-C', scratch], { stdio: 'inherit' })
+}
+
+/** First file with this name anywhere under `directory`. */
+function locate(directory, name) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name)
+    if (entry.isDirectory()) {
+      const found = locate(path, name)
+      if (found) return found
+    } else if (entry.name === name) {
+      return path
+    }
+  }
+  return null
 }
 
 // Both archives nest the binaries one level down under a versioned directory.
 for (const binary of build.binaries) {
-  const found = execFileSync('find', [scratch, '-name', binary, '-type', 'f'], { encoding: 'utf8' })
-    .split('\n')
-    .filter(Boolean)[0]
+  const found = locate(scratch, binary)
   if (!found) {
     console.error(`${binary} was not found inside the archive`)
     process.exit(1)
   }
-  execFileSync('cp', [found, join(destination, binary)])
-  execFileSync('chmod', ['+x', join(destination, binary)])
+  copyFileSync(found, join(destination, binary))
+  if (!WINDOWS) chmodSync(join(destination, binary), 0o755)
   console.log(`  ${binary} -> resources/ffmpeg/${target}/${binary}`)
 }
 

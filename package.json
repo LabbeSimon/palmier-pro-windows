@@ -137,7 +137,8 @@
       {
         "provider": "github",
         "owner": "LabbeSimon",
-        "repo": "palmier-pro-windows"
+        "repo": "palmier-pro-windows",
+        "releaseType": "release"
       }
     ]
   },
