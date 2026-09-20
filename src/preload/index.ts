@@ -87,6 +87,7 @@ const api = {
     reorderEffect: (args: unknown) => invoke<Receipt>('ops:reorderEffect', args),
     addTransition: (args: unknown) => invoke<Receipt>('ops:addTransition', args),
     removeTransition: (args: unknown) => invoke<Receipt>('ops:removeTransition', args),
+    addSubtitles: (args: unknown) => invoke<Receipt>('ops:addSubtitles', args),
   },
   agent: {
     settings: () =>
@@ -102,6 +103,12 @@ const api = {
     cancel: () => invoke<{ cancelled: boolean }>('agent:cancel'),
     clear: () => invoke<{ cleared: boolean }>('agent:clear'),
     onEvent: (listener: (event: AgentEvent) => void) => subscribe('agent:event', listener),
+  },
+  subtitles: {
+    import: (path?: string) =>
+      invoke<{ cancelled: boolean; receipt?: Receipt; unusableLines?: string[] }>('subtitles:import', path),
+    export: () =>
+      invoke<{ cancelled: boolean; path?: string; cues?: number; message?: string }>('subtitles:export'),
   },
   journal: {
     list: () => invoke<JournalEntry[]>('journal:list'),

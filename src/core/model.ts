@@ -85,6 +85,22 @@ export function defaultTextStyle(): TextStyle {
   }
 }
 
+/**
+ * Subtitles are drawn lower and smaller than a title, with a box behind them,
+ * because they are read over a moving picture rather than presented on one.
+ */
+export function defaultSubtitleStyle(): TextStyle {
+  return {
+    ...defaultTextStyle(),
+    fontSize: 42,
+    bold: false,
+    alignment: 'center',
+    backgroundColor: '#00000099',
+    strokeColor: '#000000',
+    strokeWidth: 1,
+  }
+}
+
 export type TransitionKind =
   | 'dissolve'
   | 'fade-black'

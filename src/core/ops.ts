@@ -12,6 +12,7 @@ import {
   clipEndFrame,
   CLIP_TYPES,
   defaultCrop,
+  defaultSubtitleStyle,
   defaultTextStyle,
   defaultTransform,
   isCompatible,
@@ -894,6 +895,156 @@ export function addTexts(
       warnings: [],
     },
   }
+}
+
+export interface SubtitleSpec {
+  startFrame: number
+  durationFrames: number
+  text: string
+}
+
+/**
+ * Places subtitle cues on a subtitle track, creating one if there is none.
+ *
+ * A cue is a clip like any other, so moving, trimming, splitting and rippling
+ * them comes for free — and an imported file becomes editable material rather
+ * than a sidecar the editor can only pass through.
+ */
+export function addSubtitles(
+  project: Project,
+  args: { timelineId?: string; trackId?: string; subtitles: SubtitleSpec[] },
+): MutationResult {
+  if (!Array.isArray(args.subtitles) || args.subtitles.length === 0) {
+    throw new OpError('invalid_argument', 'subtitles must be a non-empty array')
+  }
+  const target = requireTimeline(project, args.timelineId)
+  const next = clone(project)
+  const timeline = next.timelines.find((t) => t.id === target.id)!
+
+  let track: Track | undefined
+  if (args.trackId) {
+    track = timeline.tracks.find((t) => t.id === args.trackId)
+    if (!track) throw new OpError('not_found', `track ${args.trackId} is not on this timeline`)
+    if (track.type !== 'subtitle') {
+      throw new OpError('refused', `track "${track.name}" is a ${track.type} track, not a subtitle track`)
+    }
+  } else {
+    track = timeline.tracks.find((t) => t.type === 'subtitle')
+    if (!track) {
+      const sameType = timeline.tracks.filter((t) => t.type === 'subtitle').length
+      track = {
+        id: newId(),
+        type: 'subtitle',
+        name: `S${sameType + 1}`,
+        muted: false,
+        hidden: false,
+        locked: false,
+        volume: 1,
+        clips: [],
+      }
+      timeline.tracks.push(track)
+    }
+  }
+  refuseIfLocked(track, 'adding subtitles')
+
+  const created: string[] = []
+  const warnings: string[] = []
+
+  for (const [i, spec] of args.subtitles.entries()) {
+    const label = `subtitles[${i}]`
+    if (typeof spec.text !== 'string' || !spec.text.trim()) {
+      throw new OpError('invalid_argument', `${label}.text must be a non-empty string`)
+    }
+    const startFrame = requireFrame(spec.startFrame, `${label}.startFrame`)
+    const durationFrames = requireDuration(spec.durationFrames, `${label}.durationFrames`)
+
+    // Overlapping cues are common in files authored by hand or by ASR. Rather
+    // than refusing the whole import, the later cue is trimmed to start where
+    // the earlier one ends, and the change is reported.
+    const blocker = overlapping(track, startFrame, startFrame + durationFrames, new Set())
+    let start = startFrame
+    let duration = durationFrames
+    if (blocker) {
+      const free = clipEndFrame(blocker)
+      if (free >= startFrame + durationFrames) {
+        warnings.push(`${label} ("${preview(spec.text)}") overlapped an existing cue entirely and was dropped`)
+        continue
+      }
+      warnings.push(
+        `${label} ("${preview(spec.text)}") overlapped the cue before it and was moved from frame ${startFrame} to ${free}`,
+      )
+      start = free
+      duration = startFrame + durationFrames - free
+    }
+
+    const clip: Clip = {
+      id: newId(),
+      mediaRef: '',
+      mediaType: 'subtitle',
+      sourceClipType: 'subtitle',
+      startFrame: start,
+      durationFrames: duration,
+      trimStartFrame: 0,
+      trimEndFrame: 0,
+      speed: 1,
+      volume: 1,
+      fadeInFrames: 0,
+      fadeOutFrames: 0,
+      fadeInInterpolation: 'linear',
+      fadeOutInterpolation: 'linear',
+      opacity: 1,
+      // Anchored near the bottom, where a viewer expects to read them.
+      transform: { ...defaultTransform(), centerY: 0.88 },
+      crop: defaultCrop(),
+      linkGroupId: null,
+      groupId: null,
+      textContent: spec.text.trim(),
+      textStyle: defaultSubtitleStyle(),
+      effects: [],
+      keyframes: {},
+      transitionIn: null,
+    }
+    track.clips.push(clip)
+    sortClips(track)
+    created.push(clip.id)
+  }
+
+  if (created.length === 0) {
+    return {
+      project,
+      receipt: {
+        operation: 'add_subtitles',
+        changed: false,
+        summary: 'No subtitle cue could be placed',
+        affectedIds: [],
+        warnings,
+      },
+    }
+  }
+
+  return {
+    project: touch(next),
+    receipt: {
+      operation: 'add_subtitles',
+      changed: true,
+      summary: `Added ${created.length} subtitle cue(s) to "${track.name}"`,
+      affectedIds: created,
+      warnings,
+    },
+  }
+}
+
+function preview(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length > 32 ? `${flat.slice(0, 31)}…` : flat
+}
+
+/** Every subtitle cue on the timeline, in time order. */
+export function subtitleCues(timeline: Timeline): { clip: Clip; trackId: string }[] {
+  return timeline.tracks
+    .filter((track) => track.type === 'subtitle')
+    .flatMap((track) => track.clips.map((clip) => ({ clip, trackId: track.id })))
+    .sort((a, b) => a.clip.startFrame - b.clip.startFrame)
 }
 
 export function updateText(

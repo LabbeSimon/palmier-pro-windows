@@ -7,6 +7,8 @@ import { AudioMixer } from './components/AudioMixer.js'
 import { DropZone } from './components/DropZone.js'
 import { EffectsPanel } from './components/EffectsPanel.js'
 import { AgentPanel } from './components/AgentPanel.js'
+import { SubtitlePanel } from './components/SubtitlePanel.js'
+import { subtitleCues } from '../core/ops.js'
 import { Inspector } from './components/Inspector.js'
 import { MediaPanel } from './components/MediaPanel.js'
 import { Monitors } from './components/Monitors.js'
@@ -17,7 +19,7 @@ import { Toolbar } from './components/Toolbar.js'
 import { useEditor, usePreviewFrame } from './state.js'
 import { usePlayer } from './usePlayer.js'
 
-type LeftTab = 'media' | 'effects'
+type LeftTab = 'media' | 'effects' | 'subtitles'
 type RightTab = 'inspector' | 'mixer' | 'agent'
 
 /** Dock size remembered across sessions, like a Qt application's layout. */
@@ -37,7 +39,7 @@ function useStickySize(key: string, fallback: number): [number, (value: number) 
 }
 
 export function App() {
-  const { state, run, setStatus, setExportProgress } = useEditor()
+  const { state, run, refresh, setStatus, setExportProgress } = useEditor()
   const [playhead, setPlayhead] = useState(0)
   const [selectedClipIds, setSelectedClipIds] = useState<string[]>([])
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null)
@@ -55,6 +57,8 @@ export function App() {
 
   const { project, timeline } = state
   const timelineId = timeline?.id
+
+  const cues = useMemo(() => (timeline ? subtitleCues(timeline) : []), [timeline])
 
   const selectedClips = useMemo<Clip[]>(() => {
     if (!timeline) return []
@@ -109,6 +113,40 @@ export function App() {
       }),
     )
   }, [run, timeline, timelineId, playhead])
+
+  /**
+   * Import reports the lines it could not use, which `run` has nowhere to put —
+   * a file where half the cues are malformed must not look like a clean import.
+   */
+  const importSubtitles = useCallback(() => {
+    void (async () => {
+      const result = await window.palmier.subtitles.import()
+      if (!result.ok) {
+        setStatus({ text: `${result.code}: ${result.message}`, tone: 'error' })
+        return
+      }
+      const { cancelled, receipt, unusableLines } = result.value
+      if (cancelled) return
+      await refresh()
+      const unusable = unusableLines?.length
+        ? ` — ${unusableLines.length} line(s) unusable: ${unusableLines[0]}`
+        : ''
+      setStatus({ text: `${receipt?.summary ?? 'Imported'}${unusable}`, tone: unusable ? 'info' : 'ok' })
+    })()
+  }, [refresh, setStatus])
+
+  /** A fresh cue is two seconds long: enough to read, short enough to retime. */
+  const addSubtitleAtPlayhead = useCallback(() => {
+    if (!timeline) return
+    void run(() =>
+      window.palmier.ops.addSubtitles({
+        timelineId,
+        subtitles: [
+          { startFrame: playhead, durationFrames: Math.round(timeline.fps * 2), text: 'New subtitle' },
+        ],
+      }),
+    )
+  }, [run, timelineId, playhead, timeline])
 
   const addMarkerAtPlayhead = useCallback(() => {
     if (!timeline) return
@@ -192,6 +230,7 @@ export function App() {
         case 'tool:razor': setTool('razor'); break
         case 'tool:spacer': setTool('spacer'); break
         case 'view:effects': setLeftTab('effects'); break
+        case 'view:subtitles': setLeftTab('subtitles'); break
         case 'view:mixer': setRightTab('mixer'); break
         case 'view:inspector': setRightTab('inspector'); break
         case 'view:agent': setRightTab('agent'); break
@@ -299,6 +338,14 @@ export function App() {
             >
               Effects
             </button>
+            <button
+              role="tab"
+              aria-selected={leftTab === 'subtitles'}
+              className={leftTab === 'subtitles' ? 'on' : ''}
+              onClick={() => setLeftTab('subtitles')}
+            >
+              Subtitles
+            </button>
           </div>
 
           {leftTab === 'media' ? (
@@ -310,8 +357,26 @@ export function App() {
               onImport={() => void run(() => window.palmier.media.import())}
               onRemove={(assetId) => void run(() => window.palmier.ops.removeAssets({ assetIds: [assetId] }))}
             />
-          ) : (
+          ) : leftTab === 'effects' ? (
             <EffectsPanel selectionCount={selectedClipIds.length} onAdd={(id) => addEffect(id)} />
+          ) : (
+            <SubtitlePanel
+              timeline={timeline}
+              cues={cues}
+              playhead={clampedPlayhead}
+              selectedClipIds={selectedClipIds}
+              onImport={importSubtitles}
+              onExport={() => void run(() => window.palmier.subtitles.export())}
+              onAdd={addSubtitleAtPlayhead}
+              onSelect={(clipId) => setSelectedClipIds([clipId])}
+              onSeek={setPlayhead}
+              onEdit={(clipId, content) =>
+                void run(() => window.palmier.ops.updateText({ timelineId, clipId, content }))
+              }
+              onRemove={(clipId) =>
+                void run(() => window.palmier.ops.removeClips({ timelineId, clipIds: [clipId] }))
+              }
+            />
           )}
         </div>
 

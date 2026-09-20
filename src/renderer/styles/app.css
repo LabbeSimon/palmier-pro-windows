@@ -26,6 +26,7 @@
   --clip-audio: #6a9a5a;
   --clip-image: #8e6a96;
   --clip-text: #b08d57;
+  --clip-subtitle: #7a6a96;
   --playhead: #cc0000;
 
   --space-1: 4px;
@@ -335,15 +336,24 @@ select:focus {
   background: #000;
   display: grid;
   place-items: center;
-  min-height: 0;
+  min-height: 160px;
   position: relative;
   overflow: hidden;
 }
+
+/*
+ * Taken out of flow on purpose.
+ *
+ * As a grid item, `height: 100%` resolves against a track that is itself sized
+ * by the image, so a tall frame made the track taller than the box and
+ * `overflow: hidden` quietly cut the bottom off — which is precisely where
+ * subtitles are. Absolute inset can only ever be the size of the box.
+ */
 .preview img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
-  /* contain on an explicitly sized box is the only form that cannot stretch;
-     max-width/max-height inside a grid item silently can. */
   object-fit: contain;
   display: block;
 }
@@ -735,7 +745,7 @@ select:focus {
 .clip.audio { background: var(--clip-audio); }
 .clip.image { background: var(--clip-image); }
 .clip.text { background: var(--clip-text); }
-.clip.subtitle { background: var(--clip-text); }
+.clip.subtitle { background: var(--clip-subtitle); }
 
 .playhead {
   position: absolute;
@@ -1317,6 +1327,8 @@ input[type='range']:hover::-webkit-slider-thumb {
 /* --- Player -------------------------------------------------------------- */
 
 .preview video {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
@@ -1753,4 +1765,60 @@ input[type='range']:hover::-webkit-slider-thumb {
   background: none;
   border: 0;
   cursor: pointer;
+}
+
+/* --- Subtitles ------------------------------------------------------------
+   A text editor over clips that already live on the timeline: retiming is done
+   there, with the usual trim and move, not here.                             */
+
+.subtitle-list { padding: var(--space-2); }
+
+.cue {
+  margin-bottom: var(--space-2);
+  padding: var(--space-1) var(--space-2) var(--space-2);
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-left: 3px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.cue.selected { border-color: var(--accent); }
+/* The cue under the playhead, so the list and the picture agree at a glance. */
+.cue.current { border-left-color: var(--playhead); }
+
+.cue-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+}
+
+.cue-time {
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  color: var(--accent);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.cue-span {
+  flex: 1;
+  font-size: var(--fs-caption);
+  color: var(--text-faint);
+}
+
+.cue textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--font);
+  font-size: var(--fs-body);
+  line-height: 1.4;
+}
+
+.title-actions {
+  display: flex;
+  gap: 2px;
 }

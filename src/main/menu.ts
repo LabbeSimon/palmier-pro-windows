@@ -40,6 +40,7 @@ export type MenuCommand =
   | 'view:mixer'
   | 'view:inspector'
   | 'view:agent'
+  | 'view:subtitles'
   | 'playhead:start'
   | 'playhead:end'
   | 'help:mcp'
@@ -116,6 +117,7 @@ export function buildMenu(window: BrowserWindow): Menu {
         { label: 'Audio mixer', accelerator: 'CmdOrCtrl+2', click: send('view:mixer') },
         { label: 'Inspector', accelerator: 'CmdOrCtrl+3', click: send('view:inspector') },
         { label: 'Agent', accelerator: 'CmdOrCtrl+4', click: send('view:agent') },
+        { label: 'Subtitles', accelerator: 'CmdOrCtrl+5', click: send('view:subtitles') },
         { type: 'separator' },
         { label: 'Zoom in', accelerator: 'CmdOrCtrl+Plus', click: send('timeline:zoomIn') },
         { label: 'Zoom out', accelerator: 'CmdOrCtrl+-', click: send('timeline:zoomOut') },

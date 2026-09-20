@@ -146,7 +146,8 @@ function resolveClips(project: Project, timeline: Timeline, startFrame: number, 
       const overlap = clip.transitionIn?.durationFrames ?? 0
       if (clipEndFrame(clip) <= startFrame || clip.startFrame - overlap >= endFrame) return
       const asset = clip.mediaRef ? (project.assets.find((a) => a.id === clip.mediaRef) ?? null) : null
-      if (clip.mediaType !== 'text' && !asset) {
+      // Text and subtitle clips carry their own content and reference nothing.
+      if (clip.mediaType !== 'text' && clip.mediaType !== 'subtitle' && !asset) {
         throw new RenderError(`clip ${clip.id} references missing media ${clip.mediaRef}`)
       }
       resolved.push({
@@ -212,8 +213,8 @@ export function buildRenderCommand(
     const underFade = fadeOutUnder.get(clip.id) ?? 0
     const animate = animator(clip, fps, clipStartSeconds)
 
-    // --- Text: drawn straight onto the composite, no input stream needed.
-    if (clip.mediaType === 'text') {
+    // --- Text and subtitles: drawn straight onto the composite, no input stream.
+    if (clip.mediaType === 'text' || clip.mediaType === 'subtitle') {
       if (trackHidden || !clip.textContent) continue
       const style = clip.textStyle!
       const sidecarPath = `${sidecarDir}/text-${clip.id}.txt`

@@ -2,7 +2,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, protocol, sh
 import { pathToFileURL } from 'node:url'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 
 import { activeTimeline, timelineTotalFrames, type MediaAsset, type Project } from '../core/model.js'
@@ -16,6 +16,8 @@ import { TOOLS_BY_NAME } from './mcp/tools.js'
 import { AgentSession, type AgentEvent } from './agent/session.js'
 import { DEFAULT_MODEL, MODELS, readApiKey, readSettings, writeSettings } from './agent/settings.js'
 import { basename } from 'node:path'
+import { formatSrt, formatVtt, parseSubtitles } from '../core/subtitles.js'
+import { framesToSeconds, secondsToFrames } from '../core/timecode.js'
 import { cacheDirFor, isProjectFolder, loadProject, ProjectStore, saveProject } from './project/store.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -257,6 +259,7 @@ const UI_OPS: Record<string, (project: Project, args: any) => ops.MutationResult
   reorderEffect: ops.reorderEffect,
   addTransition: ops.addTransition,
   removeTransition: ops.removeTransition,
+  addSubtitles: ops.addSubtitles,
 }
 
 for (const [name, operation] of Object.entries(UI_OPS)) {
@@ -336,6 +339,73 @@ handle('agent:cancel', () => {
 handle('agent:clear', () => {
   agent?.clear()
   return { cleared: true }
+})
+
+// --- Subtitles ------------------------------------------------------------
+
+handle('subtitles:import', async (path?: string) => {
+  let target = path
+  if (!target) {
+    const picked = await dialog.showOpenDialog(window!, {
+      title: 'Import subtitles',
+      filters: [{ name: 'Subtitles', extensions: ['srt', 'vtt'] }],
+      properties: ['openFile'],
+    })
+    if (picked.canceled || !picked.filePaths[0]) return { cancelled: true }
+    target = picked.filePaths[0]
+  }
+
+  const source = await readFile(target, 'utf8')
+  const { cues, skipped } = parseSubtitles(source)
+  if (cues.length === 0) {
+    throw new OpError(
+      'refused',
+      `"${basename(target)}" contains no usable cue` +
+        (skipped.length > 0 ? ` — ${skipped[0]}` : ''),
+    )
+  }
+
+  const timeline = activeTimeline(store.project)
+  const args = {
+    timelineId: timeline.id,
+    subtitles: cues.map((cue) => ({
+      startFrame: Math.max(0, secondsToFrames(cue.startSeconds, timeline.fps)),
+      durationFrames: Math.max(1, secondsToFrames(cue.endSeconds - cue.startSeconds, timeline.fps)),
+      text: cue.text,
+    })),
+  }
+  const receipt = store.apply((p) => ops.addSubtitles(p, args), {
+    source: 'ui',
+    name: 'addSubtitles',
+    args,
+  })
+  return { cancelled: false, receipt, unusableLines: skipped }
+})
+
+handle('subtitles:export', async () => {
+  const timeline = activeTimeline(store.project)
+  const cues = ops.subtitleCues(timeline).map(({ clip }) => ({
+    startSeconds: framesToSeconds(clip.startFrame, timeline.fps),
+    endSeconds: framesToSeconds(clip.startFrame + clip.durationFrames, timeline.fps),
+    text: clip.textContent ?? '',
+  }))
+  if (cues.length === 0) {
+    throw new OpError('refused', `"${timeline.name}" has no subtitle cue to write`)
+  }
+
+  const picked = await dialog.showSaveDialog(window!, {
+    title: 'Export subtitles',
+    defaultPath: `${timeline.name}.srt`,
+    filters: [
+      { name: 'SubRip', extensions: ['srt'] },
+      { name: 'WebVTT', extensions: ['vtt'] },
+    ],
+  })
+  if (picked.canceled || !picked.filePath) return { cancelled: true }
+
+  const vtt = picked.filePath.toLowerCase().endsWith('.vtt')
+  await writeFile(picked.filePath, vtt ? formatVtt(cues) : formatSrt(cues), 'utf8')
+  return { cancelled: false, path: picked.filePath, cues: cues.length, message: `Wrote ${cues.length} cue(s) to ${picked.filePath}` }
 })
 
 handle('journal:list', () => store.journal)

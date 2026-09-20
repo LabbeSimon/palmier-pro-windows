@@ -30,6 +30,9 @@ import { TRANSITION_KINDS } from '../../core/model.js'
 import { OpError, type Receipt } from '../../core/ops.js'
 import { framesToTimecode } from '../../core/timecode.js'
 import { probeAsset, renderFrame, renderTimeline } from '../media/ffmpeg.js'
+import { formatSrt, formatVtt, parseSubtitles } from '../../core/subtitles.js'
+import { framesToSeconds, secondsToFrames } from '../../core/timecode.js'
+import { readFile, writeFile } from 'node:fs/promises'
 import { ProjectStore } from '../project/store.js'
 
 export interface ToolContext {
@@ -843,6 +846,107 @@ export const TOOLS: ToolDefinition[] = [
           }),
         ),
       ),
+  },
+  {
+    name: 'get_subtitles',
+    description:
+      'Every subtitle cue on the timeline, in time order, with its clip id so it can be moved, trimmed or ' +
+      'retimed like any other clip. Cue text is editable with update_text.',
+    inputSchema: object({ timeline_id: str('Defaults to the active timeline.') }),
+    handler: (args, ctx) => {
+      const timeline = resolveTimeline(ctx.store.project, args.timeline_id)
+      return {
+        timelineId: timeline.id,
+        fps: timeline.fps,
+        cues: ops.subtitleCues(timeline).map(({ clip, trackId }) => ({
+          clipId: clip.id,
+          trackId,
+          startFrame: clip.startFrame,
+          endFrame: clipEndFrame(clip),
+          start: framesToTimecode(clip.startFrame, timeline.fps),
+          end: framesToTimecode(clipEndFrame(clip), timeline.fps),
+          text: clip.textContent ?? '',
+        })),
+      }
+    },
+  },
+  {
+    name: 'import_subtitles',
+    description:
+      'Read an .srt or .vtt file and place its cues on a subtitle track, creating one if needed. Cues become ' +
+      'ordinary clips, so they can then be moved and trimmed. Lines the file could not supply are reported ' +
+      'rather than dropped in silence.',
+    inputSchema: object(
+      {
+        timeline_id: str('Defaults to the active timeline.'),
+        path: str('Absolute path to the subtitle file.'),
+        offset_seconds: num('Shift every cue by this much. Negative moves them earlier. Default 0.'),
+      },
+      ['path'],
+    ),
+    handler: async (args, ctx) => {
+      const timeline = resolveTimeline(ctx.store.project, args.timeline_id)
+      let source: string
+      try {
+        source = await readFile(String(args.path), 'utf8')
+      } catch (error) {
+        throw new OpError('not_found', `cannot read ${args.path}: ${(error as Error).message}`)
+      }
+
+      const { cues, skipped } = parseSubtitles(source)
+      if (cues.length === 0) {
+        throw new OpError(
+          'refused',
+          `${args.path} contains no usable cue` +
+            (skipped.length > 0 ? ` (${skipped.length} unusable: ${skipped.slice(0, 3).join('; ')})` : ''),
+        )
+      }
+
+      const offset = Number(args.offset_seconds ?? 0)
+      const subtitles = cues.map((cue) => ({
+        startFrame: Math.max(0, secondsToFrames(cue.startSeconds + offset, timeline.fps)),
+        durationFrames: Math.max(1, secondsToFrames(cue.endSeconds - cue.startSeconds, timeline.fps)),
+        text: cue.text,
+      }))
+
+      const receipt = ctx.store.apply((project) =>
+        ops.addSubtitles(project, { timelineId: timeline.id, subtitles }),
+      )
+      return receiptPayload(receipt, {
+        read: cues.length,
+        ...(skipped.length > 0 ? { unusableLines: skipped } : {}),
+      })
+    },
+  },
+  {
+    name: 'export_subtitles',
+    description:
+      'Write the timeline\'s subtitle cues out as .srt or .vtt. The format follows the file extension unless ' +
+      'given explicitly. This writes a sidecar file; it does not burn the subtitles into a render.',
+    inputSchema: object(
+      {
+        timeline_id: str('Defaults to the active timeline.'),
+        path: str('Absolute path to write.'),
+        format: { type: 'string', enum: ['srt', 'vtt'], description: 'Defaults to the path extension.' },
+      },
+      ['path'],
+    ),
+    handler: async (args, ctx) => {
+      const timeline = resolveTimeline(ctx.store.project, args.timeline_id)
+      const cues = ops.subtitleCues(timeline).map(({ clip }) => ({
+        startSeconds: framesToSeconds(clip.startFrame, timeline.fps),
+        endSeconds: framesToSeconds(clipEndFrame(clip), timeline.fps),
+        text: clip.textContent ?? '',
+      }))
+      if (cues.length === 0) {
+        throw new OpError('refused', `timeline "${timeline.name}" has no subtitle cue to write`)
+      }
+
+      const path = String(args.path)
+      const format = args.format ?? (path.toLowerCase().endsWith('.vtt') ? 'vtt' : 'srt')
+      await writeFile(path, format === 'vtt' ? formatVtt(cues) : formatSrt(cues), 'utf8')
+      return { path, format, cues: cues.length }
+    },
   },
   {
     name: 'add_markers',

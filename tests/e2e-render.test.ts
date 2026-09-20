@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { EFFECT_DEFINITIONS } from '../src/core/effects.js'
 import { TRANSITION_KINDS, type MediaAsset, type Project } from '../src/core/model.js'
 import * as ops from '../src/core/ops.js'
-import { FFMPEG_PATH, FFPROBE_PATH, renderTimeline } from '../src/main/media/ffmpeg.js'
+import { FFMPEG_PATH, FFPROBE_PATH, renderFrame, renderTimeline } from '../src/main/media/ffmpeg.js'
 
 const exec = promisify(execFile)
 
@@ -121,5 +121,58 @@ describe('track gain', () => {
       '-v', 'error', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', output,
     ])
     expect(probe.stdout).not.toContain('audio')
+  }, 240_000)
+})
+
+describe('subtitle rendering', () => {
+  /** Mean-luminance signature of one rendered frame. */
+  async function signature(project: Project, frame: number, name: string): Promise<string> {
+    const output = join(workDir, `${name}-${frame}.png`)
+    const timeline = project.timelines.find((t) => t.id === project.activeTimelineId)!
+    await renderFrame(project, timeline, frame, output)
+    const { stdout } = await exec(FFMPEG_PATH, [
+      '-hide_banner', '-v', 'error', '-i', output,
+      '-vf', 'scale=8:8,format=gray', '-f', 'rawvideo', '-',
+    ])
+    return stdout
+  }
+
+  it('burns a cue into the picture only while it is on screen', async () => {
+    // A still source, so any difference between two frames is the subtitle.
+    const stillPath = join(workDir, 'sub-still.png')
+    await exec(FFMPEG_PATH, [
+      '-hide_banner', '-y', '-f', 'lavfi', '-i', 'color=c=navy:s=320x180', '-frames:v', '1', stillPath,
+    ])
+    const still: MediaAsset = {
+      id: crypto.randomUUID(), path: stillPath, name: 'sub-still.png', type: 'image',
+      durationSeconds: 0, width: 320, height: 180, fps: 0,
+      hasAudio: false, sampleRate: 0, channels: 0, thumbnailPath: null,
+    }
+
+    let state = ops.addAssets(ops.emptyProject('Subs'), [still]).project
+    state = ops.addClips(state, { clips: [{ assetId: still.id, durationFrames: 90 }] }).project
+    state = ops.addSubtitles(state, {
+      subtitles: [{ startFrame: 30, durationFrames: 30, text: 'Subtitle on screen' }],
+    }).project
+
+    const before = await signature(state, 5, 'sub')
+    const during = await signature(state, 45, 'sub')
+    const after = await signature(state, 80, 'sub')
+
+    expect(during).not.toBe(before)
+    expect(after).toBe(before)
+  }, 240_000)
+
+  it('renders a multi-line cue without an FFmpeg error', async () => {
+    let state = ops.addAssets(ops.emptyProject('Subs2'), [asset]).project
+    state = ops.addClips(state, { clips: [{ assetId: asset.id, durationFrames: 60 }] }).project
+    state = ops.addSubtitles(state, {
+      subtitles: [{ startFrame: 10, durationFrames: 30, text: 'First line\nSecond line — 100% sure' }],
+    }).project
+
+    const output = join(workDir, 'subs-multiline.mp4')
+    const timeline = state.timelines[0]!
+    await renderTimeline(state, timeline, { outputPath: output, crf: 30, preset: 'ultrafast' }).promise
+    expect((await stat(output)).size).toBeGreaterThan(0)
   }, 240_000)
 })
