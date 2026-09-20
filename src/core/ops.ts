@@ -35,6 +35,16 @@ import {
   TRANSITION_KINDS,
 } from './model.js'
 import {
+  EASINGS,
+  isEffectTarget,
+  normalizeKeyframes,
+  parseEffectTarget,
+  STATIC_TARGETS,
+  STATIC_TARGET_SPECS,
+  type Easing,
+  type Keyframe,
+} from './keyframes.js'
+import {
   defaultParams,
   EFFECTS_BY_ID,
   type Effect,
@@ -728,6 +738,7 @@ export function addClips(project: Project, args: AddClipsArgs): MutationResult {
       textContent: null,
       textStyle: null,
       effects: [],
+      keyframes: {},
       transitionIn: null,
     }
 
@@ -759,6 +770,7 @@ export function addClips(project: Project, args: AddClipsArgs): MutationResult {
           transform: defaultTransform(),
           crop: defaultCrop(),
           effects: [],
+          keyframes: {},
           transitionIn: null,
         }
         audioTrack.clips.push(audioClip)
@@ -864,6 +876,7 @@ export function addTexts(
       textContent: spec.content,
       textStyle: { ...defaultTextStyle(), ...spec.style },
       effects: [],
+      keyframes: {},
       transitionIn: null,
     }
     track.clips.push(clip)
@@ -2184,6 +2197,336 @@ export function trimClip(project: Project, args: TrimArgs): MutationResult {
       changed: true,
       summary: `${args.kind} trim of ${delta} frame(s) on clip ${args.clipId}`,
       affectedIds: touched,
+      warnings: [],
+    },
+  }
+}
+
+// --- Keyframes ------------------------------------------------------------
+
+/**
+ * Resolves a keyframe target on a clip and returns its bounds, or throws with
+ * the reason. Refusing an unanimatable parameter here is the whole point: FFmpeg
+ * would accept the keyframe and render it as a constant, which looks like a bug
+ * in the editor rather than a limit of the filter.
+ */
+/** One animatable parameter of a clip, with the curve currently on it. */
+export interface AnimatableTarget {
+  target: string
+  label: string
+  min: number
+  max: number
+  step: number
+  unit?: string
+  /** Value in force when the curve is empty. */
+  fallback: number
+  keyframes: Keyframe[]
+}
+
+/**
+ * Every parameter of this clip that FFmpeg actually re-evaluates per frame.
+ *
+ * The keyframe editor, the MCP `list_animatable` tool and the domain's own
+ * bounds checking all read this one list, so none of them can drift from what
+ * the renderer really supports.
+ */
+export function animatableTargets(clip: Clip): AnimatableTarget[] {
+  const curves = clip.keyframes ?? {}
+  const value = (target: string): number => {
+    switch (target) {
+      case 'opacity':
+        return clip.opacity
+      case 'volume':
+        return clip.volume
+      case 'transform.centerX':
+        return clip.transform.centerX
+      case 'transform.centerY':
+        return clip.transform.centerY
+      case 'transform.scaleX':
+        return clip.transform.scaleX
+      case 'transform.scaleY':
+        return clip.transform.scaleY
+      default:
+        return clip.transform.rotation
+    }
+  }
+
+  const targets: AnimatableTarget[] = STATIC_TARGETS.filter(
+    // A still image has no soundtrack to ride, so offering it volume is noise.
+    (target) => target !== 'volume' || clip.mediaType !== 'image',
+  ).map((target) => ({
+    target,
+    ...STATIC_TARGET_SPECS[target],
+    fallback: value(target),
+    keyframes: curves[target] ?? [],
+  }))
+
+  for (const effect of clip.effects ?? []) {
+    const definition = EFFECTS_BY_ID.get(effect.definitionId)
+    if (!definition) continue
+    for (const spec of definition.params) {
+      if (!spec.animatable) continue
+      const target = `effect:${effect.id}:${spec.key}`
+      targets.push({
+        target,
+        label: `${definition.name} ${spec.label}`,
+        min: spec.min,
+        max: spec.max,
+        step: spec.step,
+        ...(spec.unit ? { unit: spec.unit } : {}),
+        fallback: effect.params[spec.key] ?? spec.default,
+        keyframes: curves[target] ?? [],
+      })
+    }
+  }
+  return targets
+}
+
+/**
+ * Bounds for one target, or a refusal that says precisely why.
+ *
+ * The happy path comes straight from `animatableTargets`; everything below it
+ * exists only to turn a miss into a message the caller can act on.
+ */
+function resolveKeyframeTarget(
+  clip: Clip,
+  target: string,
+): { min: number; max: number; label: string } {
+  const known = animatableTargets(clip).find((candidate) => candidate.target === target)
+  if (known) return { min: known.min, max: known.max, label: known.label }
+
+  if (!isEffectTarget(target)) {
+    throw new OpError(
+      'invalid_argument',
+      `"${target}" is not an animatable target. Use one of ${STATIC_TARGETS.join(', ')} or effect:<effectId>:<param>.`,
+    )
+  }
+
+  const parsed = parseEffectTarget(target)
+  if (!parsed) {
+    throw new OpError('invalid_argument', `"${target}" must look like effect:<effectId>:<param>`)
+  }
+  const effect = (clip.effects ?? []).find((e) => e.id === parsed.effectId)
+  if (!effect) {
+    throw new OpError('not_found', `clip ${clip.id} has no effect ${parsed.effectId}`)
+  }
+  const definition = EFFECTS_BY_ID.get(effect.definitionId)
+  if (!definition) {
+    throw new OpError('not_found', `unknown effect "${effect.definitionId}"`)
+  }
+  const spec = definition.params.find((p) => p.key === parsed.param)
+  if (!spec) {
+    throw new OpError(
+      'invalid_argument',
+      `"${definition.name}" has no parameter "${parsed.param}" (has ${definition.params.map((p) => p.key).join(', ') || 'none'})`,
+    )
+  }
+  throw new OpError(
+    'refused',
+    `"${definition.name}" reads ${spec.key} once when the filter starts, so it cannot be animated. ` +
+      `Animatable parameters in this build are on brightness, contrast, saturation, gamma, hue, vignette and gain.`,
+  )
+}
+
+export interface SetKeyframeArgs {
+  timelineId?: string
+  clipId: string
+  target: string
+  /** Frames from the clip's own start. */
+  frame: number
+  value: number
+  easing?: Easing
+}
+
+export function setKeyframe(project: Project, args: SetKeyframeArgs): MutationResult {
+  const frame = requireFrame(args.frame, 'frame')
+  const target = requireTimeline(project, args.timelineId)
+  requireClip(target, args.clipId)
+
+  const next = clone(project)
+  const timeline = next.timelines.find((t) => t.id === target.id)!
+  const loc = requireClip(timeline, args.clipId)
+  refuseIfLocked(loc.track, 'keyframing its clips')
+  const clip = loc.clip
+
+  if (frame >= clip.durationFrames) {
+    throw new OpError(
+      'invalid_argument',
+      `frame ${frame} is past the end of the clip (${clip.durationFrames} frames). Keyframe frames are relative to the clip start.`,
+    )
+  }
+
+  const bounds = resolveKeyframeTarget(clip, args.target)
+  const value = requireFinite(args.value, 'value')
+  if (value < bounds.min || value > bounds.max) {
+    throw new OpError(
+      'invalid_argument',
+      `${bounds.label} must be between ${bounds.min} and ${bounds.max}, got ${value}`,
+    )
+  }
+  const easing: Easing = args.easing ?? 'linear'
+  if (!EASINGS.includes(easing)) {
+    throw new OpError('invalid_argument', `easing must be one of ${EASINGS.join(', ')}`)
+  }
+
+  clip.keyframes ??= {}
+  const existing = clip.keyframes[args.target] ?? []
+  const before = JSON.stringify(existing)
+  const keyframe: Keyframe = { frame, value, easing }
+  clip.keyframes[args.target] = normalizeKeyframes([...existing.filter((k) => k.frame !== frame), keyframe])
+
+  const changed = JSON.stringify(clip.keyframes[args.target]) !== before
+  return {
+    project: changed ? touch(next) : project,
+    receipt: {
+      operation: 'set_keyframe',
+      changed,
+      summary: changed
+        ? `${bounds.label} keyframed to ${value} at clip frame ${frame} (${easing})`
+        : `${bounds.label} already had that keyframe`,
+      affectedIds: [args.clipId],
+      warnings:
+        changed && clip.keyframes[args.target]!.length === 1
+          ? ['A single keyframe holds a constant value; add a second one to see movement.']
+          : [],
+    },
+  }
+}
+
+/**
+ * Move one keyframe along the ruler, keeping its value and easing.
+ *
+ * Dragging a diamond is a single gesture, so it has to be a single undo step:
+ * doing it as a remove plus a set would make Ctrl+Z delete the keyframe instead
+ * of putting it back where it was.
+ */
+export function moveKeyframe(
+  project: Project,
+  args: { timelineId?: string; clipId: string; target: string; fromFrame: number; toFrame: number },
+): MutationResult {
+  const fromFrame = requireFrame(args.fromFrame, 'fromFrame')
+  const toFrame = requireFrame(args.toFrame, 'toFrame')
+  const target = requireTimeline(project, args.timelineId)
+  requireClip(target, args.clipId)
+
+  const next = clone(project)
+  const timeline = next.timelines.find((t) => t.id === target.id)!
+  const loc = requireClip(timeline, args.clipId)
+  refuseIfLocked(loc.track, 'moving keyframes on its clips')
+  const clip = loc.clip
+
+  const existing = clip.keyframes?.[args.target] ?? []
+  const moved = existing.find((k) => k.frame === fromFrame)
+  if (!moved) {
+    throw new OpError(
+      'not_found',
+      `"${args.target}" has no keyframe at clip frame ${fromFrame}` +
+        (existing.length > 0 ? ` (it has ${existing.map((k) => k.frame).join(', ')})` : ''),
+    )
+  }
+  if (toFrame >= clip.durationFrames) {
+    throw new OpError(
+      'invalid_argument',
+      `frame ${toFrame} is past the end of the clip (${clip.durationFrames} frames)`,
+    )
+  }
+  if (toFrame === fromFrame) {
+    return {
+      project,
+      receipt: {
+        operation: 'move_keyframe',
+        changed: false,
+        summary: `Keyframe on "${args.target}" is already at clip frame ${fromFrame}`,
+        affectedIds: [],
+        warnings: [],
+      },
+    }
+  }
+
+  // Landing on an occupied frame replaces it, exactly as setKeyframe does.
+  const replaced = existing.some((k) => k.frame === toFrame)
+  clip.keyframes![args.target] = normalizeKeyframes([
+    ...existing.filter((k) => k.frame !== fromFrame && k.frame !== toFrame),
+    { ...moved, frame: toFrame },
+  ])
+
+  return {
+    project: touch(next),
+    receipt: {
+      operation: 'move_keyframe',
+      changed: true,
+      summary: `Moved the "${args.target}" keyframe from clip frame ${fromFrame} to ${toFrame}`,
+      affectedIds: [args.clipId],
+      warnings: replaced ? [`Replaced the keyframe that was already at frame ${toFrame}.`] : [],
+    },
+  }
+}
+
+export function removeKeyframe(
+  project: Project,
+  args: { timelineId?: string; clipId: string; target: string; frame?: number },
+): MutationResult {
+  const target = requireTimeline(project, args.timelineId)
+  requireClip(target, args.clipId)
+
+  const next = clone(project)
+  const timeline = next.timelines.find((t) => t.id === target.id)!
+  const loc = requireClip(timeline, args.clipId)
+  refuseIfLocked(loc.track, 'removing keyframes from its clips')
+  const clip = loc.clip
+  const existing = clip.keyframes?.[args.target]
+
+  if (!existing || existing.length === 0) {
+    return {
+      project,
+      receipt: {
+        operation: 'remove_keyframe',
+        changed: false,
+        summary: `Clip ${args.clipId} has no keyframes on "${args.target}"`,
+        affectedIds: [],
+        warnings: [],
+      },
+    }
+  }
+
+  if (args.frame === undefined) {
+    delete clip.keyframes[args.target]
+    return {
+      project: touch(next),
+      receipt: {
+        operation: 'remove_keyframe',
+        changed: true,
+        summary: `Cleared ${existing.length} keyframe(s) on "${args.target}"`,
+        affectedIds: [args.clipId],
+        warnings: [],
+      },
+    }
+  }
+
+  const frame = requireFrame(args.frame, 'frame')
+  const remaining = existing.filter((k) => k.frame !== frame)
+  if (remaining.length === existing.length) {
+    return {
+      project,
+      receipt: {
+        operation: 'remove_keyframe',
+        changed: false,
+        summary: `No keyframe on "${args.target}" at clip frame ${frame}`,
+        affectedIds: [],
+        warnings: [],
+      },
+    }
+  }
+  if (remaining.length === 0) delete clip.keyframes[args.target]
+  else clip.keyframes[args.target] = remaining
+
+  return {
+    project: touch(next),
+    receipt: {
+      operation: 'remove_keyframe',
+      changed: true,
+      summary: `Removed the keyframe at clip frame ${frame} on "${args.target}"`,
+      affectedIds: [args.clipId],
       warnings: [],
     },
   }

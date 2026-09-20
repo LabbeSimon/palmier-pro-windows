@@ -1395,3 +1395,158 @@ input[type='range']:hover::-webkit-slider-thumb {
   padding: 1px 0;
   font-variant-numeric: tabular-nums;
 }
+
+/* --- Keyframe bar ---------------------------------------------------------
+   Sits under the project monitor, where Kdenlive puts it. Frames on these
+   rulers are clip-relative, so a row always spans exactly one clip.          */
+
+.keyframe-bar {
+  flex: 0 0 auto;
+  max-height: 168px;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-3) var(--space-2);
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+}
+
+.keyframe-bar.empty {
+  padding: var(--space-2) var(--space-3);
+}
+
+.keyframe-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.keyframe-title {
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.keyframe-scope {
+  flex: 1;
+  font-size: var(--fs-caption);
+  font-family: var(--font-mono);
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.keyframe-add,
+.keyframe-easing {
+  font-size: var(--fs-caption);
+  padding: 1px var(--space-1);
+}
+
+/* A select is as wide as its longest option unless told otherwise, and the
+   option list here is effect names — long enough to swallow the whole row. */
+.keyframe-add {
+  flex: 0 0 auto;
+  width: 130px;
+}
+
+.keyframe-easing {
+  width: 74px;
+}
+
+.keyframe-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px 0;
+}
+
+.keyframe-label {
+  flex: 0 0 116px;
+  font-size: var(--fs-caption);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.keyframe-track {
+  position: relative;
+  flex: 1;
+  height: 26px;
+  min-width: 80px;
+  background: var(--bg-track);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: crosshair;
+  overflow: hidden;
+}
+
+.keyframe-curve {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  color: var(--accent-dim);
+  pointer-events: none;
+}
+
+.keyframe-dot {
+  position: absolute;
+  top: 50%;
+  width: 11px;
+  height: 11px;
+  margin: -6px 0 0 -5px;
+  padding: 0;
+  background: var(--clip-text);
+  border: 1px solid #1c1f21;
+  border-radius: 1px;
+  transform: rotate(45deg);
+  cursor: ew-resize;
+}
+
+/* Easing is legible without a tooltip: filled diamond eases, hollow holds. */
+.keyframe-dot.smooth { border-radius: 50%; }
+.keyframe-dot.hold { background: transparent; border-color: var(--clip-text); }
+.keyframe-dot.on { background: var(--accent); border-color: var(--text); }
+.keyframe-dot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.keyframe-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--playhead);
+  pointer-events: none;
+}
+
+.keyframe-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.keyframe-actions .icon-btn.diamond.on { color: var(--clip-text); }
+
+.keyframe-value {
+  width: 62px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  text-align: right;
+}
+
+.keyframe-legend {
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-caption);
+  color: var(--text-faint);
+}
+
+.field.slider.animated label { color: var(--clip-text); }
+
+.kf-badge {
+  font-size: var(--fs-caption);
+  color: var(--clip-text);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}

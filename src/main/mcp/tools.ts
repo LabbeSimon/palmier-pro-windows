@@ -102,6 +102,9 @@ function timelineSnapshot(project: Project, timeline: Timeline): Record<string, 
         fadeInFrames: clip.fadeInFrames,
         fadeOutFrames: clip.fadeOutFrames,
         effectCount: clip.effects?.length ?? 0,
+        ...(Object.keys(clip.keyframes ?? {}).length > 0
+          ? { animatedTargets: Object.keys(clip.keyframes) }
+          : {}),
         ...(clip.groupId ? { groupId: clip.groupId } : {}),
         ...(clip.linkGroupId ? { linkGroupId: clip.linkGroupId } : {}),
         ...(clip.transitionIn
@@ -634,6 +637,122 @@ export const TOOLS: ToolDefinition[] = [
             clipId: args.clip_id,
             content: args.content,
             style: prune({ fontSize: args.font_size, color: args.color }),
+          }),
+        ),
+      ),
+  },
+  {
+    name: 'list_animatable',
+    description:
+      'The targets that can actually be keyframed on a clip, with their bounds. Only parameters FFmpeg re-evaluates ' +
+      'every frame are listed: a keyframe on anything else would render as a constant, so set_keyframe refuses it. ' +
+      'Call this before set_keyframe rather than guessing a target name.',
+    inputSchema: object(
+      { timeline_id: str('Defaults to the active timeline.'), clip_id: str('Clip to inspect.') },
+      ['clip_id'],
+    ),
+    handler: (args, ctx) => {
+      const timeline = resolveTimeline(ctx.store.project, args.timeline_id)
+      const found = ops.findClip(timeline, args.clip_id)
+      if (!found) throw new OpError('not_found', `clip ${args.clip_id} is not on timeline ${timeline.id}`)
+
+      return {
+        clipId: args.clip_id,
+        durationFrames: found.clip.durationFrames,
+        note: 'Keyframe frames are relative to the clip start, so moving the clip carries its animation.',
+        targets: ops.animatableTargets(found.clip).map((target) => ({
+          target: target.target,
+          label: target.label,
+          min: target.min,
+          max: target.max,
+          currentValue: target.fallback,
+          keyframes: target.keyframes,
+        })),
+      }
+    },
+  },
+  {
+    name: 'set_keyframe',
+    description:
+      'Place or replace a keyframe on an animatable target. Frames are relative to the clip start. One keyframe ' +
+      'alone holds a constant — two or more make motion. Use list_animatable to find valid targets and bounds.',
+    inputSchema: object(
+      {
+        timeline_id: str('Defaults to the active timeline.'),
+        clip_id: str('Clip to animate.'),
+        target: str('Target from list_animatable, e.g. transform.scaleX or effect:<id>:amount.'),
+        frame: int('Frames from the clip start, not from the timeline start.'),
+        value: num('Value at that frame.'),
+        easing: {
+          type: 'string',
+          enum: ['linear', 'smooth', 'hold'],
+          description: 'How the value travels to the next keyframe. Default linear.',
+        },
+      },
+      ['clip_id', 'target', 'frame', 'value'],
+    ),
+    handler: (args, ctx) =>
+      receiptPayload(
+        ctx.store.apply((p) =>
+          ops.setKeyframe(p, {
+            timelineId: args.timeline_id,
+            clipId: args.clip_id,
+            target: args.target,
+            frame: args.frame,
+            value: args.value,
+            easing: args.easing,
+          }),
+        ),
+      ),
+  },
+  {
+    name: 'move_keyframe',
+    description:
+      'Slide one keyframe to another frame, keeping its value and easing. One undoable step, unlike removing ' +
+      'and re-adding it. Landing on an occupied frame replaces the keyframe that was there.',
+    inputSchema: object(
+      {
+        timeline_id: str('Defaults to the active timeline.'),
+        clip_id: str('Clip holding the curve.'),
+        target: str('Target path.'),
+        from_frame: int('Clip-relative frame the keyframe is on now.'),
+        to_frame: int('Clip-relative frame to move it to.'),
+      },
+      ['clip_id', 'target', 'from_frame', 'to_frame'],
+    ),
+    handler: (args, ctx) =>
+      receiptPayload(
+        ctx.store.apply((p) =>
+          ops.moveKeyframe(p, {
+            timelineId: args.timeline_id,
+            clipId: args.clip_id,
+            target: args.target,
+            fromFrame: args.from_frame,
+            toFrame: args.to_frame,
+          }),
+        ),
+      ),
+  },
+  {
+    name: 'remove_keyframe',
+    description: 'Remove one keyframe, or the whole curve when no frame is given. Reports honestly when there is none.',
+    inputSchema: object(
+      {
+        timeline_id: str('Defaults to the active timeline.'),
+        clip_id: str('Clip holding the curve.'),
+        target: str('Target path.'),
+        frame: int('Clip-relative frame. Omit to clear the entire curve.'),
+      },
+      ['clip_id', 'target'],
+    ),
+    handler: (args, ctx) =>
+      receiptPayload(
+        ctx.store.apply((p) =>
+          ops.removeKeyframe(p, {
+            timelineId: args.timeline_id,
+            clipId: args.clip_id,
+            target: args.target,
+            frame: args.frame,
           }),
         ),
       ),

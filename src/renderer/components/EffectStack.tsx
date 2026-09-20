@@ -1,4 +1,5 @@
 import { EFFECTS_BY_ID, type Effect } from '../../core/effects.js'
+import { isAnimated, type KeyframeMap } from '../../core/keyframes.js'
 import { TRANSITION_LABELS } from '../../core/transitions.js'
 import { TRANSITION_KINDS, type Clip, type Timeline } from '../../core/model.js'
 import { IconEye, IconEyeOff, IconTrash } from './Icons.js'
@@ -81,6 +82,7 @@ export function EffectStack(props: Props) {
             <EffectRow
               key={effect.id}
               effect={effect}
+              keyframes={clip.keyframes ?? {}}
               index={index}
               count={effects.length}
               onSetParams={props.onSetParams}
@@ -97,6 +99,7 @@ export function EffectStack(props: Props) {
 
 function EffectRow(props: {
   effect: Effect
+  keyframes: KeyframeMap
   index: number
   count: number
   onSetParams: (effectId: string, params: Record<string, number>) => void
@@ -156,25 +159,39 @@ function EffectRow(props: {
       {definition.params.length === 0 ? (
         <p className="hint">No settings.</p>
       ) : (
-        definition.params.map((param) => (
-          <div className="field slider" key={param.key}>
-            <label title={param.label}>{param.label}</label>
-            <input
-              type="range"
-              min={param.min}
-              max={param.max}
-              step={param.step}
-              value={effect.params[param.key] ?? param.default}
-              onChange={(event) =>
-                props.onSetParams(effect.id, { [param.key]: Number(event.target.value) })
-              }
-            />
-            <span className="readout">
-              {(effect.params[param.key] ?? param.default).toFixed(param.step < 1 ? 2 : 0)}
-              {param.unit ? <span className="unit">{param.unit}</span> : null}
-            </span>
-          </div>
-        ))
+        definition.params.map((param) => {
+          // A curve overrides the slider at render time; saying so beats letting
+          // someone drag a control that no longer affects the picture.
+          const animated = isAnimated(props.keyframes[`effect:${effect.id}:${param.key}`])
+          return (
+            <div className={`field slider${animated ? ' animated' : ''}`} key={param.key}>
+              <label title={param.label}>{param.label}</label>
+              <input
+                type="range"
+                min={param.min}
+                max={param.max}
+                step={param.step}
+                disabled={animated}
+                value={effect.params[param.key] ?? param.default}
+                onChange={(event) =>
+                  props.onSetParams(effect.id, { [param.key]: Number(event.target.value) })
+                }
+              />
+              <span className="readout">
+                {animated ? (
+                  <span className="kf-badge" title="Driven by keyframes — edit it in the keyframe bar">
+                    keyed
+                  </span>
+                ) : (
+                  <>
+                    {(effect.params[param.key] ?? param.default).toFixed(param.step < 1 ? 2 : 0)}
+                    {param.unit ? <span className="unit">{param.unit}</span> : null}
+                  </>
+                )}
+              </span>
+            </div>
+          )
+        })
       )}
     </div>
   )

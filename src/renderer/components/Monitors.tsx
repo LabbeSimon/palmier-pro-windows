@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 
-import type { MediaAsset, Timeline } from '../../core/model.js'
+import type { Clip, MediaAsset, Timeline } from '../../core/model.js'
+import type { Easing } from '../../core/keyframes.js'
+import { KeyframeEditor } from './KeyframeEditor.js'
 import { framesToTimecode } from '../../core/timecode.js'
 import { ProjectMonitor } from './ProjectMonitor.js'
 import { Transport } from './Transport.js'
@@ -16,6 +18,8 @@ interface Props {
   empty: boolean
   /** Asset shown in the clip monitor; null when nothing is picked in the bin. */
   clipAsset: MediaAsset | null
+  /** The single selected clip, or null when the selection is not exactly one. */
+  keyframeClip: Clip | null
   player: PlayerState
   onSeek: (frame: number) => void
   onSplit: () => void
@@ -23,6 +27,9 @@ interface Props {
   onRenderPreview: () => void
   onCancelRender: () => void
   onPlaybackError: (message: string) => void
+  onSetKeyframe: (target: string, frame: number, value: number, easing: Easing) => void
+  onMoveKeyframe: (target: string, fromFrame: number, toFrame: number) => void
+  onRemoveKeyframe: (target: string, frame?: number) => void
 }
 
 type Monitor = 'project' | 'clip'
@@ -129,6 +136,18 @@ export function Monitors(props: Props) {
           onSeek={props.onSeek}
           onSplit={props.onSplit}
           onTogglePlay={() => props.onSetPlaying(!props.player.playing)}
+        />
+      )}
+
+      {showClip ? null : (
+        <KeyframeEditor
+          clip={props.keyframeClip}
+          timeline={props.timeline}
+          frame={props.frame}
+          onSeek={props.onSeek}
+          onSetKeyframe={props.onSetKeyframe}
+          onMoveKeyframe={props.onMoveKeyframe}
+          onRemoveKeyframe={props.onRemoveKeyframe}
         />
       )}
     </div>

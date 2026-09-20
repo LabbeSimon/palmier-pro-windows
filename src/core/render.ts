@@ -20,6 +20,7 @@ import {
   type Track,
 } from './model.js'
 import { effectChain } from './effects.js'
+import { isAnimated, keyframeExpression, type Keyframe } from './keyframes.js'
 import { transitionRender } from './transitions.js'
 import { ffmpegTime, framesToSeconds } from './timecode.js'
 
@@ -50,6 +51,12 @@ export interface RenderCommand {
 }
 
 export class RenderError extends Error {}
+
+/** Current value of an effect parameter, used as the fallback for its curve. */
+function effectValue(clip: Clip, effectId: string, param: string): number {
+  const effect = (clip.effects ?? []).find((e) => e.id === effectId)
+  return effect?.params[param] ?? 0
+}
 
 /** FFmpeg filter arguments treat `\`, `:`, `'` and `,` as syntax. */
 function escapeFilterPath(path: string): string {
@@ -100,6 +107,22 @@ function fadeAlphaExpression(clip: Clip, fps: number, timelineStartSeconds: numb
   const base = String(clip.opacity)
   const expr = parts.reduceRight((acc, part) => `${part},${acc})`, base)
   return `min(1,max(0,${expr}))*${base}`
+}
+
+/**
+ * Expression factory for one clip's keyframed targets, in graph time.
+ *
+ * `clipStartSeconds` is where the clip begins in the filter graph, so a
+ * clip-relative keyframe lands at the right moment even after the clip moves
+ * or a transition pulls it back.
+ */
+function animator(clip: Clip, fps: number, clipStartSeconds: number) {
+  const tracks = clip.keyframes ?? {}
+  return (target: string, fallback: number): string | null => {
+    const keyframes: Keyframe[] | undefined = tracks[target]
+    if (!isAnimated(keyframes)) return null
+    return `(${keyframeExpression(keyframes!, fps, clipStartSeconds, fallback)})`
+  }
 }
 
 interface ResolvedClip {
@@ -187,6 +210,7 @@ export function buildRenderCommand(
     const clipEndSeconds = framesToSeconds(clipEndFrame(clip), fps) - timelineStartSeconds
     const enable = `between(t,${clipStartSeconds.toFixed(6)},${clipEndSeconds.toFixed(6)})`
     const underFade = fadeOutUnder.get(clip.id) ?? 0
+    const animate = animator(clip, fps, clipStartSeconds)
 
     // --- Text: drawn straight onto the composite, no input stream needed.
     if (clip.mediaType === 'text') {
@@ -275,9 +299,34 @@ export function buildRenderCommand(
       if (clip.speed !== 1) chain.push(`setpts=PTS/${clip.speed.toFixed(6)}`)
       chain.push(`fps=${fps}`, 'format=yuva420p')
 
+      // An animated scale needs the expression form, which `scale` only honours
+      // with eval=frame. The static path above already sized the box.
+      const scaleXExpression = animate('transform.scaleX', clip.transform.scaleX)
+      const scaleYExpression = animate('transform.scaleY', clip.transform.scaleY)
+      if (scaleXExpression || scaleYExpression) {
+        const baseW = drawW / Math.max(0.0001, clip.transform.scaleX)
+        const baseH = drawH / Math.max(0.0001, clip.transform.scaleY)
+        const w = scaleXExpression
+          ? `'max(2,round(${baseW.toFixed(3)}*${scaleXExpression}/2)*2)'`
+          : String(drawW)
+        const h = scaleYExpression
+          ? `'max(2,round(${baseH.toFixed(3)}*${scaleYExpression}/2)*2)'`
+          : String(drawH)
+        chain.push(`scale=w=${w}:h=${h}:eval=frame`)
+      }
+
+      const rotationExpression = animate('transform.rotation', clip.transform.rotation)
+      if (rotationExpression) {
+        chain.push(`rotate=a='${rotationExpression}*PI/180':ow=${boxW}:oh=${boxH}:fillcolor=none`)
+      }
+
       // The effect stack sits after geometry and before the opacity envelope, so
       // a grade sees the framed image and fades still ride on top of it.
-      chain.push(...effectChain(clip.effects, 'video'))
+      chain.push(
+        ...effectChain(clip.effects, 'video', (effectId, param) =>
+          animate(`effect:${effectId}:${param}`, effectValue(clip, effectId, param)),
+        ),
+      )
 
       // Fades are authored against the clip's own start, which the transition moved.
       const headOffset = framesToSeconds(overlapFrames, fps)
@@ -293,13 +342,28 @@ export function buildRenderCommand(
           `fade=t=out:st=${outStart.toFixed(6)}:d=${framesToSeconds(totalFadeOut, fps).toFixed(6)}:alpha=1`,
         )
       }
-      if (clip.opacity < 1) chain.push(`colorchannelmixer=aa=${clip.opacity.toFixed(6)}`)
+      // colorchannelmixer takes its value once, so an animated opacity has to go
+      // through geq — which reads time as T, not t.
+      const opacityExpression = animate('opacity', clip.opacity)
+      if (opacityExpression) {
+        chain.push(
+          `geq=lum='p(X,Y)':cb='p(X,Y)':cr='p(X,Y)':a='${opacityExpression.replace(/\bt\b/g, 'T')}*alpha(X,Y)'`,
+        )
+      } else if (clip.opacity < 1) {
+        chain.push(`colorchannelmixer=aa=${clip.opacity.toFixed(6)}`)
+      }
 
       // Shift the stream to its timeline position so `enable` and overlay agree.
       chain.push(`setpts=PTS-STARTPTS+${clipStartSeconds.toFixed(6)}/TB`)
 
-      let overlayX: string = String(Math.round(clip.transform.centerX * width - boxW / 2))
-      let overlayY: string = String(Math.round(clip.transform.centerY * height - boxH / 2))
+      const centerXExpression = animate('transform.centerX', clip.transform.centerX)
+      const centerYExpression = animate('transform.centerY', clip.transform.centerY)
+      let overlayX: string = centerXExpression
+        ? `${centerXExpression}*${width}-${boxW / 2}`
+        : String(Math.round(clip.transform.centerX * width - boxW / 2))
+      let overlayY: string = centerYExpression
+        ? `${centerYExpression}*${height}-${boxH / 2}`
+        : String(Math.round(clip.transform.centerY * height - boxH / 2))
       if (clip.transitionIn && overlapFrames > 0) {
         const render = transitionRender(
           clip.transitionIn.kind,
@@ -328,9 +392,18 @@ export function buildRenderCommand(
     if (carriesAudio && !trackMuted && clip.volume > 0 && !options.videoOnly) {
       const chain: string[] = ['aresample=48000', 'asetpts=PTS-STARTPTS']
       if (clip.speed !== 1) chain.push(...atempoChain(clip.speed))
-      chain.push(...effectChain(clip.effects, 'audio'))
-      const gain = clip.volume * trackVolume
-      if (Math.abs(gain - 1) > 1e-6) chain.push(`volume=${gain.toFixed(6)}`)
+      chain.push(
+        ...effectChain(clip.effects, 'audio', (effectId, param) =>
+          animate(`effect:${effectId}:${param}`, effectValue(clip, effectId, param)),
+        ),
+      )
+      const volumeExpression = animate('volume', clip.volume)
+      if (volumeExpression) {
+        chain.push(`volume='(${volumeExpression})*${trackVolume.toFixed(6)}':eval=frame`)
+      } else {
+        const gain = clip.volume * trackVolume
+        if (Math.abs(gain - 1) > 1e-6) chain.push(`volume=${gain.toFixed(6)}`)
+      }
       if (clip.fadeInFrames > 0) {
         chain.push(`afade=t=in:st=0:d=${framesToSeconds(clip.fadeInFrames, fps).toFixed(6)}`)
       }

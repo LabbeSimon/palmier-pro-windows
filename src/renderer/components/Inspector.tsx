@@ -4,6 +4,7 @@ import { clipEndFrame, type Clip, type MediaAsset, type Timeline } from '../../c
 import type { ClipProperties } from '../../core/ops.js'
 import { framesToTimecode } from '../../core/timecode.js'
 import { EffectStack } from './EffectStack.js'
+import { isAnimated } from '../../core/keyframes.js'
 
 interface Props {
   timeline: Timeline
@@ -29,6 +30,8 @@ function NumberField(props: {
   min?: number
   /** Shown after the field — f, s, ×, °, dB. Keeps the number unambiguous. */
   unit?: string
+  /** A keyframe curve is driving this value, so the field is a readout. */
+  keyed?: boolean
   onCommit: (value: number) => void
 }) {
   const [draft, setDraft] = useState(String(props.value))
@@ -44,13 +47,19 @@ function NumberField(props: {
   }
 
   return (
-    <div className="field">
+    <div className={`field${props.keyed ? ' animated' : ''}`}>
       <label title={props.label}>{props.label}</label>
       <span className="value-cell">
+        {props.keyed ? (
+          <span className="kf-badge" title="Driven by keyframes — edit it in the keyframe bar">
+            keyed
+          </span>
+        ) : null}
         <input
           type="number"
           step={props.step ?? 1}
           min={props.min}
+          disabled={props.keyed}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           onBlur={commit}
@@ -80,6 +89,8 @@ function Readout(props: { label: string; value: string; mono?: boolean }) {
 export function Inspector(props: Props) {
   const { timeline, clips } = props
   const clip = clips.length === 1 ? clips[0]! : null
+  /** True when a curve drives this parameter, making its field a readout. */
+  const keyed = (target: string) => isAnimated(clip?.keyframes?.[target])
 
   return (
     <div className="panel">
@@ -227,6 +238,7 @@ export function Inspector(props: Props) {
               <NumberField
                 label="Opacity"
                 value={clip?.opacity ?? 1}
+                keyed={keyed('opacity')}
                 step={0.05}
                 min={0}
                 onCommit={(opacity) => props.onApply({ opacity })}
@@ -234,6 +246,7 @@ export function Inspector(props: Props) {
               <NumberField
                 label="Volume"
                 value={clip?.volume ?? 1}
+                keyed={keyed('volume')}
                 step={0.1}
                 min={0}
                 onCommit={(volume) => props.onApply({ volume })}
@@ -272,12 +285,14 @@ export function Inspector(props: Props) {
               <NumberField
                 label="Centre X"
                 value={clip?.transform.centerX ?? 0.5}
+                keyed={keyed('transform.centerX')}
                 step={0.01}
                 onCommit={(centerX) => props.onApply({ transform: { centerX } })}
               />
               <NumberField
                 label="Centre Y"
                 value={clip?.transform.centerY ?? 0.5}
+                keyed={keyed('transform.centerY')}
                 step={0.01}
                 onCommit={(centerY) => props.onApply({ transform: { centerY } })}
               />
@@ -285,6 +300,7 @@ export function Inspector(props: Props) {
                 label="Scale X"
                 unit="×"
                 value={clip?.transform.scaleX ?? 1}
+                keyed={keyed('transform.scaleX')}
                 step={0.05}
                 onCommit={(scaleX) => props.onApply({ transform: { scaleX } })}
               />
@@ -292,6 +308,7 @@ export function Inspector(props: Props) {
                 label="Scale Y"
                 unit="×"
                 value={clip?.transform.scaleY ?? 1}
+                keyed={keyed('transform.scaleY')}
                 step={0.05}
                 onCommit={(scaleY) => props.onApply({ transform: { scaleY } })}
               />
@@ -299,6 +316,7 @@ export function Inspector(props: Props) {
                 label="Rotation"
                 unit="°"
                 value={clip?.transform.rotation ?? 0}
+                keyed={keyed('transform.rotation')}
                 step={1}
                 onCommit={(rotation) => props.onApply({ transform: { rotation } })}
               />

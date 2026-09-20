@@ -33,9 +33,10 @@ Fait et vérifié :
 - Import vidéo = image + son en clips liés
 - Glisser-déposer depuis l'explorateur
 - Double moniteur clip / projet, mixeur audio en dB
-- Barre de menus native, 30 outils MCP, bouton de connexion en un clic
+- Barre de menus native, 38 outils MCP, bouton de connexion en un clic
 - Logo intégré : `.ico` multi-tailles dans l'exe, `.png` Linux
-- 137 tests verts ; exe Windows signé non, mais construit et livré
+- Keyframes : domaine, rendu, éditeur, MCP
+- 217 tests verts ; exe Windows signé non, mais construit et livré
 
 ---
 
@@ -79,13 +80,34 @@ jamais chargé avant ce correctif — et les schémas déclarés *standard*
 normalisent l'hôte en minuscules, donc lire le nom de fichier depuis l'hôte
 échouait. Le nom passe désormais par le **chemin**.
 
-### Bloc 3 — Keyframes  ⬜
+### Bloc 3 — Keyframes  ✅ (20/09/2026)
 
-- [ ] Modèle : courbes par paramètre d'effet et de transformation
-- [ ] Éditeur de keyframes sous le moniteur (comme Kdenlive)
-- [ ] Interpolations : linéaire, lisse, maintien
-- [ ] Rendu FFmpeg des paramètres animés
-- [ ] Outils MCP pour poser et lire des keyframes
+- [x] **Modèle** : une courbe par cible, frames **relatives au début du clip** —
+      en absolu, déplacer un clip désynchronise son animation en silence
+- [x] **Interpolations** : linéaire, lisse (smoothstep), maintien
+- [x] **Rendu FFmpeg** : expressions `if(lt(t,…))` imbriquées, `eval=frame` sur
+      `scale`, `rotate`, `overlay`, `eq`, `hue`, `vignette`, `volume`, et `geq`
+      pour l'opacité
+- [x] **Éditeur sous le moniteur** : une règle par cible, courbe tracée, losanges
+      déplaçables, précédent/suivant, valeur et interpolation du keyframe choisi
+- [x] **Outils MCP** : `list_animatable`, `set_keyframe`, `move_keyframe`,
+      `remove_keyframe` — 38 outils au total
+
+Deux choses valent d'être écrites noir sur blanc :
+
+**Seuls 7 paramètres d'effet sont animables**, parce que FFmpeg ne réévalue par
+image que `eq`, `hue`, `vignette` et `volume`. Poser un keyframe ailleurs est
+**refusé avec la raison**, plutôt qu'accepté puis rendu comme une constante —
+un mensonge qu'on ne verrait qu'à l'export.
+
+**Le glissement d'un losange est une seule opération** (`moveKeyframe`), pas un
+retrait suivi d'une pose : sinon `Ctrl+Z` supprimait le keyframe au lieu de le
+remettre où il était.
+
+Vérifié au vrai FFmpeg : `tests/e2e-keyframes.test.ts` rend chaque cible animée
+et compare la signature de l'image aux frames 2 et 50 — une expression que
+FFmpeg accepte mais n'évalue qu'une fois est indiscernable d'un keyframe qui
+marche, sauf en comparant deux images.
 
 ### Bloc 4 — Panneau agent intégré  ⬜
 
@@ -125,6 +147,9 @@ Le point qui distingue ce logiciel de Kdenlive.
   Quelqu'un qui connaît Kdenlive doit être immédiatement chez lui. En cas
   d'arbitrage entre « joli » et « comme Kdenlive », c'est Kdenlive qui gagne.
 - **Ordre de travail : Bloc 1 (UI) puis Bloc 2 (lecture temps réel).**
+- **20/09/2026 — Un paramètre non réévalué par FFmpeg n'est pas animable.**
+  Plutôt que de stocker une courbe qui ne se verrait pas au rendu, le domaine
+  refuse et nomme les paramètres qui, eux, marchent.
 
 ## Références Kdenlive
 

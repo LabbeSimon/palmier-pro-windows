@@ -50,12 +50,28 @@ describe('effect registry', () => {
     }
   })
 
-  it('treats a neutral setting as a no-op so it costs no filter pass', () => {
-    expect(EFFECTS_BY_ID.get('brightness')!.filter({ amount: 0 })).toBeNull()
-    expect(EFFECTS_BY_ID.get('contrast')!.filter({ amount: 1 })).toBeNull()
-    expect(EFFECTS_BY_ID.get('saturation')!.filter({ amount: 1 })).toBeNull()
-    expect(EFFECTS_BY_ID.get('audio-gain')!.filter({ db: 0 })).toBeNull()
-    expect(EFFECTS_BY_ID.get('brightness')!.filter({ amount: 0.5 })).toContain('eq=brightness')
+  it('drops a neutral setting from the chain so it costs no filter pass', () => {
+    // Neutrality is decided by effectChain, not by each definition: an animated
+    // parameter that merely starts neutral still has to render.
+    const neutral = (definitionId: string, params: Record<string, number>) =>
+      effectChain(
+        [{ id: 'x', definitionId, enabled: true, params }],
+        EFFECTS_BY_ID.get(definitionId)!.kind,
+      )
+    expect(neutral('brightness', { amount: 0 })).toEqual([])
+    expect(neutral('contrast', { amount: 1 })).toEqual([])
+    expect(neutral('saturation', { amount: 1 })).toEqual([])
+    expect(neutral('audio-gain', { db: 0 })).toEqual([])
+    expect(neutral('brightness', { amount: 0.5 })[0]).toContain('eq=brightness')
+  })
+
+  it('keeps a neutral-valued effect when it is animated', () => {
+    const chain = effectChain(
+      [{ id: 'fx1', definitionId: 'brightness', enabled: true, params: { amount: 0 } }],
+      'video',
+      (effectId, param) => (effectId === 'fx1' && param === 'amount' ? '(0.5*t)' : null),
+    )
+    expect(chain[0]).toContain('(0.5*t)')
   })
 })
 
@@ -82,7 +98,9 @@ describe('effectChain', () => {
       ],
       'video',
     )
-    expect(chain).toEqual(['eq=saturation=2.0000'])
+    // Quoted because an animated value is an expression full of commas, which
+    // FFmpeg would otherwise read as further filter options.
+    expect(chain).toEqual(["eq=saturation='2.0000':eval=frame"])
   })
 
   it('returns nothing for an unknown definition rather than throwing mid-render', () => {

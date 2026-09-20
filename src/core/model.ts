@@ -4,8 +4,10 @@
  */
 
 import type { Effect } from './effects.js'
+import type { KeyframeMap } from './keyframes.js'
 
 export type { Effect } from './effects.js'
+export type { Keyframe, KeyframeMap } from './keyframes.js'
 
 export const CLIP_TYPES = ['video', 'audio', 'image', 'text', 'sequence', 'subtitle'] as const
 export type ClipType = (typeof CLIP_TYPES)[number]
@@ -153,6 +155,12 @@ export interface Clip {
   textStyle: TextStyle | null
   /** Effect stack, applied in order. */
   effects: Effect[]
+  /**
+   * Animation curves keyed by target path — `opacity`, `transform.scaleX`,
+   * `effect:<effectId>:<param>`. Frames are relative to the clip's own start,
+   * so moving a clip carries its animation with it.
+   */
+  keyframes: KeyframeMap
   /** Transition into this clip, overlapping its predecessor. */
   transitionIn: Transition | null
 }

@@ -331,6 +331,7 @@ export function App() {
           error={preview.error}
           empty={totalFrames === 0}
           clipAsset={project.assets.find((a) => a.id === selectedAssetId) ?? null}
+          keyframeClip={selectedClips.length === 1 ? selectedClips[0]! : null}
           player={player.state}
           onSeek={setPlayhead}
           onSplit={splitAtPlayhead}
@@ -338,6 +339,18 @@ export function App() {
           onRenderPreview={() => void player.render()}
           onCancelRender={() => void player.cancel()}
           onPlaybackError={(message) => setStatus({ text: `Playback: ${message}`, tone: 'error' })}
+          onSetKeyframe={(target, frame, value, easing) => {
+            const clipId = selectedClipIds[0]
+            if (clipId) void run(() => window.palmier.ops.setKeyframe({ timelineId, clipId, target, frame, value, easing }))
+          }}
+          onMoveKeyframe={(target, fromFrame, toFrame) => {
+            const clipId = selectedClipIds[0]
+            if (clipId) void run(() => window.palmier.ops.moveKeyframe({ timelineId, clipId, target, fromFrame, toFrame }))
+          }}
+          onRemoveKeyframe={(target, frame) => {
+            const clipId = selectedClipIds[0]
+            if (clipId) void run(() => window.palmier.ops.removeKeyframe({ timelineId, clipId, target, frame }))
+          }}
         />
 
         <Splitter

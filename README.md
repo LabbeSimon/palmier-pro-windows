@@ -25,12 +25,17 @@ licence: TypeScript, Electron and FFmpeg, written from scratch.
 - **11 transitions** — dissolve, fades through black and white, four wipes, two slides and
   two circles. The incoming clip is pulled back over its predecessor using its own head
   handle, so clip positions never move and removing a transition is lossless.
+- **Keyframes** on opacity, volume, the five transform parameters and the effect
+  parameters FFmpeg re-evaluates per frame, with linear, smooth and hold interpolation. A
+  keyframe bar under the project monitor draws each curve; frames are stored relative to the
+  clip, so moving a clip carries its animation. Anything FFmpeg would render as a constant is
+  refused rather than silently accepted.
 - **Track lock, mute, hide** and a per-track gain fader in a decibel-calibrated mixer.
 - **Dual monitors** — the clip monitor shows raw source from the bin, the project monitor
   shows the composited edit.
 - **Native menu** with real accelerators; every item routes to the same handler the UI
   buttons use, so there is no second implementation to drift.
-- **MCP server** on `http://127.0.0.1:19789/mcp`, 30 tools, bound to loopback only.
+- **MCP server** on `http://127.0.0.1:19789/mcp`, 38 tools, bound to loopback only.
 - **Export** — H.264 / AAC MP4 with live progress and cancellation.
 - **Undo/redo** shared by the UI and the agent: an agent's edit is undoable from the toolbar,
   and a UI edit is undoable from the `undo` tool.

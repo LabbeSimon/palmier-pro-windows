@@ -26,7 +26,21 @@ export interface EffectParamSpec {
   default: number
   /** Suffix shown next to the value: %, px, dB, °, Hz. */
   unit?: string
+  /**
+   * True only when the underlying FFmpeg filter evaluates this parameter per
+   * frame (`eval=frame`). A keyframe on anything else would render as a
+   * constant, so the domain refuses it rather than lying.
+   */
+  animatable?: boolean
 }
+
+/**
+ * Turns a parameter key into the text FFmpeg should see: either a formatted
+ * constant, or a time expression when that parameter is keyframed. Definitions
+ * call it instead of formatting values themselves, so animation needs no second
+ * code path.
+ */
+export type ParamResolver = (key: string, value: number, digits?: number) => string
 
 export interface EffectDefinition {
   id: string
@@ -38,9 +52,15 @@ export interface EffectDefinition {
   /**
    * Returns the FFmpeg filter fragment, or null when the settings are a no-op —
    * a neutral effect must not cost a filter pass.
+   *
+   * `resolve` is supplied when the clip has keyframes; a definition that ignores
+   * it simply renders a constant.
    */
-  filter: (params: Record<string, number>) => string | null
+  filter: (params: Record<string, number>, resolve?: ParamResolver) => string | null
 }
+
+/** Default resolver: no animation, just the formatted number. */
+const plain: ParamResolver = (_key, value, digits = 4) => value.toFixed(digits)
 
 /** An effect instance on a clip. */
 export interface Effect {
@@ -61,8 +81,8 @@ export const EFFECT_DEFINITIONS: EffectDefinition[] = [
     category: 'Color',
     kind: 'video',
     description: 'Lifts or lowers overall luminance.',
-    params: [{ key: 'amount', label: 'Brightness', min: -1, max: 1, step: 0.01, default: 0 }],
-    filter: (p) => (near(p.amount ?? 0, 0) ? null : `eq=brightness=${fixed(p.amount ?? 0)}`),
+    params: [{ key: 'amount', animatable: true, label: 'Brightness', min: -1, max: 1, step: 0.01, default: 0 }],
+    filter: (p, resolve = plain) => `eq=brightness='${resolve('amount', p.amount ?? 0)}':eval=frame`,
   },
   {
     id: 'contrast',
@@ -70,8 +90,8 @@ export const EFFECT_DEFINITIONS: EffectDefinition[] = [
     category: 'Color',
     kind: 'video',
     description: 'Expands or compresses the tonal range around mid grey.',
-    params: [{ key: 'amount', label: 'Contrast', min: 0, max: 3, step: 0.01, default: 1 }],
-    filter: (p) => (near(p.amount ?? 1, 1) ? null : `eq=contrast=${fixed(p.amount ?? 1)}`),
+    params: [{ key: 'amount', animatable: true, label: 'Contrast', min: 0, max: 3, step: 0.01, default: 1 }],
+    filter: (p, resolve = plain) => `eq=contrast='${resolve('amount', p.amount ?? 1)}':eval=frame`,
   },
   {
     id: 'saturation',
@@ -79,8 +99,8 @@ export const EFFECT_DEFINITIONS: EffectDefinition[] = [
     category: 'Color',
     kind: 'video',
     description: 'Intensity of colour. Zero is monochrome.',
-    params: [{ key: 'amount', label: 'Saturation', min: 0, max: 3, step: 0.01, default: 1 }],
-    filter: (p) => (near(p.amount ?? 1, 1) ? null : `eq=saturation=${fixed(p.amount ?? 1)}`),
+    params: [{ key: 'amount', animatable: true, label: 'Saturation', min: 0, max: 3, step: 0.01, default: 1 }],
+    filter: (p, resolve = plain) => `eq=saturation='${resolve('amount', p.amount ?? 1)}':eval=frame`,
   },
   {
     id: 'gamma',
@@ -88,8 +108,8 @@ export const EFFECT_DEFINITIONS: EffectDefinition[] = [
     category: 'Color',
     kind: 'video',
     description: 'Shifts midtones without moving black or white.',
-    params: [{ key: 'amount', label: 'Gamma', min: 0.1, max: 3, step: 0.01, default: 1 }],
-    filter: (p) => (near(p.amount ?? 1, 1) ? null : `eq=gamma=${fixed(p.amount ?? 1)}`),
+    params: [{ key: 'amount', animatable: true, label: 'Gamma', min: 0.1, max: 3, step: 0.01, default: 1 }],
+    filter: (p, resolve = plain) => `eq=gamma='${resolve('amount', p.amount ?? 1)}':eval=frame`,
   },
   {
     id: 'hue',
@@ -97,8 +117,8 @@ export const EFFECT_DEFINITIONS: EffectDefinition[] = [
     category: 'Color',
     kind: 'video',
     description: 'Rotates every colour around the wheel.',
-    params: [{ key: 'degrees', label: 'Hue', min: -180, max: 180, step: 1, default: 0, unit: '°' }],
-    filter: (p) => (near(p.degrees ?? 0, 0) ? null : `hue=h=${fixed(p.degrees ?? 0, 2)}`),
+    params: [{ key: 'degrees', animatable: true, label: 'Hue', min: -180, max: 180, step: 1, default: 0, unit: '°' }],
+    filter: (p, resolve = plain) => `hue=h='${resolve('degrees', p.degrees ?? 0, 2)}'`,
   },
   {
     id: 'grayscale',
@@ -152,7 +172,8 @@ export const EFFECT_DEFINITIONS: EffectDefinition[] = [
     kind: 'video',
     description: 'Soft defocus.',
     params: [{ key: 'radius', label: 'Radius', min: 0, max: 50, step: 0.5, default: 4, unit: 'px' }],
-    filter: (p) => (near(p.radius ?? 0, 0) ? null : `gblur=sigma=${fixed(p.radius ?? 0, 2)}`),
+    // gblur reads sigma once at init, so this parameter is deliberately not animatable.
+  filter: (p) => (near(p.radius ?? 0, 0) ? null : `gblur=sigma=${fixed(p.radius ?? 0, 2)}`),
   },
   {
     id: 'sharpen',
@@ -203,8 +224,8 @@ export const EFFECT_DEFINITIONS: EffectDefinition[] = [
     category: 'Stylize',
     kind: 'video',
     description: 'Darkens the corners to pull the eye inward.',
-    params: [{ key: 'angle', label: 'Strength', min: 0.1, max: 1.5, step: 0.05, default: 0.7 }],
-    filter: (p) => `vignette=angle=${fixed(p.angle ?? 0.7, 3)}`,
+    params: [{ key: 'angle', animatable: true, label: 'Strength', min: 0.1, max: 1.5, step: 0.05, default: 0.7 }],
+    filter: (p, resolve = plain) => `vignette=angle='${resolve('angle', p.angle ?? 0.7, 3)}':eval=frame`,
   },
   {
     id: 'grain',
@@ -233,8 +254,8 @@ export const EFFECT_DEFINITIONS: EffectDefinition[] = [
     category: 'Audio',
     kind: 'audio',
     description: 'Level change in decibels.',
-    params: [{ key: 'db', label: 'Gain', min: -40, max: 20, step: 0.5, default: 0, unit: 'dB' }],
-    filter: (p) => (near(p.db ?? 0, 0) ? null : `volume=${fixed(p.db ?? 0, 2)}dB`),
+    params: [{ key: 'db', animatable: true, label: 'Gain', min: -40, max: 20, step: 0.5, default: 0, unit: 'dB' }],
+    filter: (p, resolve = plain) => `volume='${resolve('db', p.db ?? 0, 2)}':eval=frame:precision=float`,
   },
   {
     id: 'highpass',
@@ -302,16 +323,47 @@ export function defaultParams(definition: EffectDefinition): Record<string, numb
 /**
  * Builds the filter chain for a clip's effects of one kind, in stack order.
  * Disabled and neutral effects contribute nothing.
+ *
+ * `expressionFor` supplies a time expression when a parameter is keyframed; a
+ * neutral effect is only dropped when it is *not* animated, since an animated
+ * parameter that happens to start at its neutral value still has to render.
  */
-export function effectChain(effects: Effect[] | undefined, kind: EffectKind): string[] {
+export function effectChain(
+  effects: Effect[] | undefined,
+  kind: EffectKind,
+  expressionFor?: (effectId: string, param: string) => string | null,
+): string[] {
   if (!effects?.length) return []
   const out: string[] = []
   for (const effect of effects) {
     if (!effect.enabled) continue
     const definition = EFFECTS_BY_ID.get(effect.definitionId)
     if (!definition || definition.kind !== kind) continue
-    const fragment = definition.filter(effect.params)
+
+    const animated = definition.params.some(
+      (spec) => spec.animatable && expressionFor?.(effect.id, spec.key),
+    )
+    if (!animated && isNeutral(definition, effect.params)) continue
+
+    const resolve: ParamResolver = (key, value, digits = 4) =>
+      expressionFor?.(effect.id, key) ?? value.toFixed(digits)
+    const fragment = definition.filter(effect.params, resolve)
     if (fragment) out.push(fragment)
   }
   return out
+}
+
+/** True when the settings leave the picture or sound untouched. */
+function isNeutral(definition: EffectDefinition, params: Record<string, number>): boolean {
+  const NEUTRAL: Record<string, Record<string, number>> = {
+    brightness: { amount: 0 },
+    contrast: { amount: 1 },
+    saturation: { amount: 1 },
+    gamma: { amount: 1 },
+    hue: { degrees: 0 },
+    'audio-gain': { db: 0 },
+  }
+  const neutral = NEUTRAL[definition.id]
+  if (!neutral) return false
+  return Object.entries(neutral).every(([key, value]) => near(params[key] ?? value, value))
 }
