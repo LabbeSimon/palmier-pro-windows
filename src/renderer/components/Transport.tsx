@@ -7,7 +7,7 @@ interface Props {
   frame: number
   totalFrames: number
   playing: boolean
-  /** False until a proxy exists; the play button says why it is disabled. */
+  /** False until a proxy exists; the play button then builds one before playing. */
   canPlay: boolean
   onSeek: (frame: number) => void
   onSplit: () => void
@@ -42,8 +42,7 @@ export function Transport(props: Props) {
         </button>
         <button
           className={`icon-btn${props.playing ? ' on' : ''}`}
-          title={props.canPlay ? 'Play / pause (Space)' : 'Build the preview first to play'}
-          disabled={!props.canPlay}
+          title={props.canPlay ? 'Play / pause (Space)' : 'Build the preview and play (Space)'}
           onClick={props.onTogglePlay}
         >
           {props.playing ? <IconPause /> : <IconPlay />}

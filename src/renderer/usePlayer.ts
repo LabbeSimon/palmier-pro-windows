@@ -17,9 +17,10 @@ export interface PlayerState {
  * Drives the timeline proxy: knows whether one exists, whether it still matches
  * the edit, and owns the play/pause state.
  *
- * The proxy is never rendered automatically. Encoding on every keystroke would
+ * The proxy is never rendered on its own. Encoding on every keystroke would
  * burn the machine, so it follows Kdenlive: you ask for it, and the UI says
- * plainly when what you are watching is out of date.
+ * plainly when what you are watching is out of date. Asking to *play* counts
+ * as asking — and then it plays, rather than stopping once the encode is done.
  */
 export function usePlayer(project: Project | null, timeline: Timeline | null) {
   const [info, setInfo] = useState<PreviewInfo | null>(null)
@@ -63,7 +64,8 @@ export function usePlayer(project: Project | null, timeline: Timeline | null) {
     lastFingerprint.current = info.fingerprint
   }, [info])
 
-  const render = useCallback(async () => {
+  /** Builds the proxy. Returns whether it succeeded, so a caller can then play. */
+  const render = useCallback(async (): Promise<boolean> => {
     setError(null)
     setRendering(true)
     const result = await window.palmier.preview.render()
@@ -71,10 +73,26 @@ export function usePlayer(project: Project | null, timeline: Timeline | null) {
     if (!result.ok) {
       setError(result.message)
       setProgress(null)
-      return
+      return false
     }
     setInfo(result.value)
+    return true
   }, [])
+
+  /**
+   * Play, building the proxy first if there is none.
+   *
+   * Asking to play and getting an encode that stops when it finishes is the
+   * kind of thing that makes an editor feel unfinished: the intent was to
+   * watch it, so it starts as soon as it can.
+   */
+  const play = useCallback(async () => {
+    if (fresh) {
+      setPlaying((current) => !current)
+      return
+    }
+    if (await render()) setPlaying(true)
+  }, [fresh, render])
 
   const cancel = useCallback(async () => {
     await window.palmier.preview.cancel()
@@ -86,6 +104,7 @@ export function usePlayer(project: Project | null, timeline: Timeline | null) {
   return {
     state: { info, fresh, playing, rendering, progress, error } satisfies PlayerState,
     setPlaying,
+    play,
     render,
     cancel,
     refresh,

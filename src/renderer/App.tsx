@@ -416,8 +416,7 @@ export function App() {
       switch (event.key) {
         case ' ':
           event.preventDefault()
-          if (player.state.fresh) player.setPlaying(!player.state.playing)
-          else void player.render()
+          void player.play()
           break
         case 'ArrowLeft':
           event.preventDefault()
@@ -666,6 +665,7 @@ export function App() {
           onSeek={setPlayhead}
           onSplit={splitAtPlayhead}
           onSetPlaying={player.setPlaying}
+          onPlay={() => void player.play()}
           onRenderPreview={() => void player.render()}
           onCancelRender={() => void player.cancel()}
           onPlaybackError={(message) => setStatus({ text: `Playback: ${message}`, tone: 'error' })}

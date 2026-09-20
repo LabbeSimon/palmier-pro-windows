@@ -24,6 +24,8 @@ interface Props {
   onSeek: (frame: number) => void
   onSplit: () => void
   onSetPlaying: (playing: boolean) => void
+  /** Play, building the proxy first if there is none. */
+  onPlay: () => void
   onRenderPreview: () => void
   onCancelRender: () => void
   onPlaybackError: (message: string) => void
@@ -101,6 +103,7 @@ export function Monitors(props: Props) {
           empty={props.empty}
           onSeek={props.onSeek}
           onSetPlaying={props.onSetPlaying}
+          onPlay={props.onPlay}
           onRenderPreview={props.onRenderPreview}
           onCancelRender={props.onCancelRender}
           onPlaybackError={props.onPlaybackError}
@@ -135,7 +138,7 @@ export function Monitors(props: Props) {
           canPlay={props.player.fresh}
           onSeek={props.onSeek}
           onSplit={props.onSplit}
-          onTogglePlay={() => props.onSetPlaying(!props.player.playing)}
+          onTogglePlay={props.onPlay}
         />
       )}
 

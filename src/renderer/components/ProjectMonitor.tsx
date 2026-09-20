@@ -19,6 +19,8 @@ interface Props {
   onCancelRender: () => void
   /** Surfaces why playback refused to start, instead of silently un-pressing play. */
   onPlaybackError: (message: string) => void
+  /** Play, building the proxy first if there is none. */
+  onPlay: () => void
 }
 
 /**
