@@ -13,6 +13,7 @@ import { buildMenu } from './menu.js'
 import { existingPreview, fingerprintTimeline, renderPreview, type PreviewJob } from './media/preview.js'
 import { buildProxies, canProxy, existingProxy, PROXY_WIDTH, type ProxyJob } from './media/proxy.js'
 import { CONFIDENT, syncByAudio, SyncError } from './media/sync.js'
+import { checkForUpdate, downloadUpdate, initUpdater, installUpdate, updateState } from './updater.js'
 import { MCPServer, DEFAULT_MCP_PORT } from './mcp/server.js'
 import { TOOLS_BY_NAME } from './mcp/tools.js'
 import { AgentSession, type AgentEvent } from './agent/session.js'
@@ -345,6 +346,22 @@ handle('agent:cancel', () => {
 handle('agent:clear', () => {
   agent?.clear()
   return { cleared: true }
+})
+
+// --- Updates --------------------------------------------------------------
+
+handle('update:state', () => updateState())
+handle('update:check', () => checkForUpdate())
+handle('update:download', () => downloadUpdate())
+handle('update:install', async () => {
+  if (store.isDirty) {
+    throw new OpError(
+      'refused',
+      'Save the project first: installing an update restarts the app and unsaved work would be lost.',
+    )
+  }
+  installUpdate()
+  return { installing: true }
 })
 
 // --- Multicam -------------------------------------------------------------
@@ -729,7 +746,12 @@ function registerFontProtocol(): void {
 app.whenReady().then(async () => {
   registerFontProtocol()
   createWindow()
+  initUpdater((update) => window?.webContents.send('update:state', update))
   await startMCP()
+
+  // One quiet check at startup. Nothing downloads or installs without being
+  // asked; this only fills in the notice in the status bar.
+  setTimeout(() => void checkForUpdate(), 4000)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

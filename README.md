@@ -163,6 +163,27 @@ graph relies on.
 
 **Cross-building from Linux needs Wine for the `.exe` targets.** Only `zip` builds without
 it — the NSIS installer *and* the single-file portable both wrap the app in an NSIS stub.
+CI sidesteps this entirely by building the Windows artifacts on a Windows runner.
+
+## Releases
+
+Pushing a tag builds both platforms and attaches the binaries to a GitHub release:
+
+```bash
+npm version patch        # or minor / major
+git push --follow-tags
+```
+
+`.github/workflows/release.yml` runs the full suite first, then builds on `windows-latest`
+and `ubuntu-latest` and publishes. `.github/workflows/ci.yml` runs the suite on every push.
+
+The app checks for a newer release on startup and shows a notice in the status bar.
+Downloading and restarting are two separate clicks, and an update refuses to install over an
+unsaved project — an editor left open on an unsaved cut must never restart itself.
+
+**Builds are not code-signed.** Windows SmartScreen warns on first run, and will keep doing so
+until an Authenticode certificate is bought (roughly €300/year for an OV certificate, more for
+EV). Everything else works unsigned, including updates.
 The zip contains the same working `Palmier Win.exe`; unzip anywhere and run it.
 
 Two traps when installing Wine on Debian/Ubuntu:

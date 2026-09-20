@@ -2039,3 +2039,20 @@ input[type='range']:hover::-webkit-slider-thumb {
 }
 
 .angle.on .angle-name { color: var(--text); }
+
+.update-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-caption);
+  color: var(--text-muted);
+}
+
+.update-notice.ready { color: var(--ok); }
+
+.update-notice .unsigned {
+  padding: 0 3px;
+  color: var(--warn);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+}

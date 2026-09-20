@@ -46,7 +46,8 @@
     },
     "files": [
       "out/**/*",
-      "package.json"
+      "package.json",
+      "node_modules/**/*"
     ],
     "win": {
       "target": [
@@ -131,7 +132,17 @@
     },
     "portable": {
       "artifactName": "${productName}-${version}-x64-portable.${ext}"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "LabbeSimon",
+        "repo": "palmier-pro-windows"
+      }
+    ]
   },
-  "homepage": "https://simonlabbe.fr"
+  "homepage": "https://simonlabbe.fr",
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  }
 }

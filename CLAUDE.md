@@ -38,6 +38,7 @@ Fait et vérifié :
 - Keyframes : domaine, rendu, éditeur, MCP
 - Agent intégré + journal d'actions annulables une par une
 - Sous-titres SRT/VTT, étalonnage courbes + roues, proxys, multicam
+- CI + release automatique sur tag, mise à jour dans l'app
 - 321 tests verts ; exe Windows signé non, mais construit et livré
 
 ---
@@ -178,12 +179,23 @@ avec un transport bouchonné, mais aucune requête n'a été envoyée pour de vr
       gonfle le score — avec un plancher à 1 s la mesure tombait 6 s à côté.
       Plancher porté à la moitié de la prise la plus courte.
 
-### Bloc 6 — Distribution  ⬜
+### Bloc 6 — Distribution  🟡 (3/4)
 
-- [ ] **Release GitHub avec les binaires attachés** — bloqué sur `gh auth login`
-- [ ] Signature du code (sinon SmartScreen avertit à chaque lancement)
-- [ ] CI qui construit l'exe à chaque tag
-- [ ] Mise à jour automatique dans l'app
+- [x] **CI qui construit à chaque tag** : `.github/workflows/release.yml`.
+      La suite tourne **avant** toute publication — une release qui échoue à
+      ses propres tests est pire que pas de release, c'est celle que les gens
+      téléchargent. Les artefacts Windows sont construits sur un runner
+      Windows, ce qui supprime le besoin de Wine.
+- [x] **Release GitHub avec les binaires attachés** : plus besoin de
+      `gh auth login`, `electron-builder --publish always` utilise le
+      `GITHUB_TOKEN` du workflow. Il suffit de pousser un tag `v*`.
+- [x] **Mise à jour automatique** : vérification au démarrage, avis dans la
+      barre d'état. Télécharger et redémarrer sont **deux clics séparés**, et
+      l'installation est refusée si le projet n'est pas enregistré — un
+      monteur laisse l'app ouverte des heures sur un montage non sauvé.
+- [ ] **Signature du code** — bloqué sur un achat : certificat Authenticode
+      ~300 €/an en OV, davantage en EV. Sans lui SmartScreen avertit au
+      premier lancement. C'est une décision de Simon, pas un travail à faire.
 
 ---
 

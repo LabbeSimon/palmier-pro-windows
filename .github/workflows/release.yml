@@ -1,0 +1,78 @@
+# Builds and publishes on a version tag.
+#
+# Windows artifacts are built on a Windows runner, not cross-built: the NSIS
+# installer and the portable exe both need Wine when built from Linux, and a
+# real runner removes that whole class of problem.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # Nothing is published before the suite has run. A release that fails its own
+  # tests is worse than no release: it is the one people will download.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run fetch:ffmpeg:linux
+      - run: npm run fetch:fonts
+      - run: npm run typecheck
+      - run: npm test
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            fetch: fetch:ffmpeg
+            target: --win --x64
+            artifacts: |
+              dist/*.exe
+              dist/*.blockmap
+              dist/latest.yml
+          - os: ubuntu-latest
+            fetch: fetch:ffmpeg:linux
+            target: --linux --x64
+            artifacts: |
+              dist/*.AppImage
+              dist/*.deb
+              dist/latest-linux.yml
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run ${{ matrix.fetch }}
+      - run: npm run fetch:fonts
+      - run: npm run build
+
+      # electron-builder publishes straight to the release for this tag. The
+      # app is not code-signed: Windows SmartScreen warns on first run until a
+      # certificate is bought, and saying so here is better than a mystery.
+      - run: npx electron-builder --publish always ${{ matrix.target }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: palmier-win-${{ matrix.os }}
+          path: ${{ matrix.artifacts }}
+          if-no-files-found: warn

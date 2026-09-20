@@ -1,0 +1,24 @@
+# Tests on every push. The suite shells out to a real FFmpeg — filter-graph
+# expressions cannot be proven correct by inspection — so the runner fetches the
+# same build the app ships rather than whatever the image happens to carry.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run fetch:ffmpeg:linux
+      - run: npm run fetch:fonts
+      - run: npm run typecheck
+      - run: npm test

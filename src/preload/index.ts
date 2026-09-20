@@ -5,6 +5,7 @@ import type { Receipt } from '../core/ops.js'
 import type { MenuCommand } from '../main/menu.js'
 import type { JournalEntry } from '../main/project/store.js'
 import type { AgentEvent } from '../main/agent/session.js'
+import type { UpdateState } from '../main/updater.js'
 
 export interface Snapshot {
   project: Project
@@ -107,6 +108,13 @@ const api = {
     cancel: () => invoke<{ cancelled: boolean }>('agent:cancel'),
     clear: () => invoke<{ cleared: boolean }>('agent:clear'),
     onEvent: (listener: (event: AgentEvent) => void) => subscribe('agent:event', listener),
+  },
+  update: {
+    state: () => invoke<UpdateState>('update:state'),
+    check: () => invoke<UpdateState>('update:check'),
+    download: () => invoke<UpdateState>('update:download'),
+    install: () => invoke<{ installing: boolean }>('update:install'),
+    onChanged: (listener: (state: UpdateState) => void) => subscribe('update:state', listener),
   },
   multicam: {
     sync: (assetIds: string[]) =>
