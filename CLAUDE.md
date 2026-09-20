@@ -28,7 +28,7 @@ sur la même timeline que l'utilisateur, avec le même historique d'annulation.
 Fait et vérifié :
 
 - Modèle timeline en domaine frame, opérations pures, annulation partagée
-- 21 effets, 11 transitions, tous rendus vérifiés au vrai FFmpeg
+- 23 effets, 11 transitions, tous rendus vérifiés au vrai FFmpeg
 - Outils sélection / rasoir / espaceur, aimantation, verrouillage de piste
 - Import vidéo = image + son en clips liés
 - Glisser-déposer depuis l'explorateur
@@ -44,6 +44,11 @@ Fait et vérifié :
 ---
 
 ## À FAIRE
+
+Les six blocs sont faits. **Un seul point reste ouvert et il n'est pas
+technique** : la signature du code Windows demande un certificat Authenticode
+(~300 €/an), donc c'est une décision d'achat. Tout le reste tourne, est testé,
+et est poussé.
 
 ### Bloc 1 — Interface fidèle à Kdenlive  ✅ (19-20/09/2026)
 
