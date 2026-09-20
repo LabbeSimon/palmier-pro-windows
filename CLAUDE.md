@@ -45,7 +45,7 @@ Fait et vérifié :
 
 ## À FAIRE
 
-### Bloc 1 — Interface fidèle à Kdenlive  ✅ (19/09/2026)
+### Bloc 1 — Interface fidèle à Kdenlive  ✅ (19-20/09/2026)
 
 - [x] **Typographie** : Noto Sans, la police de KDE, récupérée au build et
       embarquée ; échelle de rôles réglée sur les densités Kdenlive
@@ -58,8 +58,15 @@ Fait et vérifié :
 - [x] **Règle temporelle** : graduations mineures + zone de travail in/out,
       exposée aussi en MCP (`set_work_zone`)
 
-Reste ouvert sur ce bloc : les docks sont redimensionnables mais pas encore
-**détachables ni réarrangeables** comme les vrais docks Qt.
+- [x] **Docks réarrangeables** (20/09) : un onglet se **glisse d'un dock à
+      l'autre**, l'agencement est retenu entre les sessions, et
+      `Affichage ▸ Réinitialiser` le remet d'aplomb. Un dock vidé garde une
+      bande étroite — sans endroit où lâcher un onglet, le dernier panneau
+      sorti serait inatteignable.
+
+Reste ouvert : **détacher** un panneau en fenêtre flottante. Ça demande un
+second processus de rendu ; déplacer un panneau d'un côté à l'autre est ce
+qu'on fait réellement au quotidien.
 
 ### Bloc 2 — Lecture temps réel  ✅ (19/09/2026)
 

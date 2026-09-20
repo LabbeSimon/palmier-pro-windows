@@ -12,6 +12,7 @@ import { subtitleCues } from '../core/ops.js'
 import { Inspector } from './components/Inspector.js'
 import { MediaPanel } from './components/MediaPanel.js'
 import { Monitors } from './components/Monitors.js'
+import { Dock, type DockPanel, type DockSide } from './components/Dock.js'
 import { Splitter } from './components/Splitter.js'
 import { StatusBar } from './components/StatusBar.js'
 import { TimelineView, type TimelineTool } from './components/TimelineView.js'
@@ -19,8 +20,17 @@ import { Toolbar } from './components/Toolbar.js'
 import { useEditor, usePreviewFrame } from './state.js'
 import { usePlayer } from './usePlayer.js'
 
-type LeftTab = 'media' | 'effects' | 'subtitles'
-type RightTab = 'inspector' | 'mixer' | 'agent'
+type PanelId = 'media' | 'effects' | 'subtitles' | 'inspector' | 'mixer' | 'agent'
+
+/** Where each panel starts out, matching Kdenlive's default arrangement. */
+const DEFAULT_LAYOUT: Record<PanelId, DockSide> = {
+  media: 'left',
+  effects: 'left',
+  subtitles: 'left',
+  inspector: 'right',
+  mixer: 'right',
+  agent: 'right',
+}
 
 /** Dock size remembered across sessions, like a Qt application's layout. */
 function useStickySize(key: string, fallback: number): [number, (value: number) => void] {
@@ -38,6 +48,45 @@ function useStickySize(key: string, fallback: number): [number, (value: number) 
   return [size, update]
 }
 
+const LAYOUT_KEY = 'dock.layout'
+
+/** Width of a dock with nothing in it — enough to aim a tab at. */
+const EMPTY_DOCK_WIDTH = 34
+
+/**
+ * Which dock each panel sits in, remembered between sessions the way a Qt
+ * application remembers its arrangement.
+ *
+ * An unknown or missing entry falls back to the default rather than vanishing:
+ * a panel added in a later version must still appear for someone who has
+ * already rearranged theirs.
+ */
+function useStickyLayout(): [
+  Record<string, DockSide>,
+  (update: (current: Record<string, DockSide>) => Record<string, DockSide>) => void,
+] {
+  const [layout, setLayout] = useState<Record<string, DockSide>>(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(LAYOUT_KEY) ?? '{}') as Record<string, DockSide>
+      return { ...DEFAULT_LAYOUT, ...stored }
+    } catch {
+      return { ...DEFAULT_LAYOUT }
+    }
+  })
+
+  const update = useCallback(
+    (fn: (current: Record<string, DockSide>) => Record<string, DockSide>) => {
+      setLayout((current) => {
+        const next = fn(current)
+        window.localStorage.setItem(LAYOUT_KEY, JSON.stringify(next))
+        return next
+      })
+    },
+    [],
+  )
+  return [layout, update]
+}
+
 export function App() {
   const { state, run, refresh, setStatus, setExportProgress } = useEditor()
   const [playhead, setPlayhead] = useState(0)
@@ -53,8 +102,33 @@ export function App() {
   const [tool, setTool] = useState<TimelineTool>('select')
   const [editMode, setEditMode] = useState<EditMode>('normal')
   const [snapEnabled, setSnapEnabled] = useState(true)
-  const [leftTab, setLeftTab] = useState<LeftTab>('media')
-  const [rightTab, setRightTab] = useState<RightTab>('inspector')
+  const [leftTab, setLeftTab] = useState<string>('media')
+  const [rightTab, setRightTab] = useState<string>('inspector')
+  const [layout, setLayout] = useStickyLayout()
+
+  /**
+   * Moves a panel to the other dock and brings it to the front there.
+   *
+   * Arriving behind whatever was already showing would look like the drag had
+   * done nothing at all.
+   */
+  const movePanel = useCallback(
+    (panelId: string, side: DockSide) => {
+      setLayout((current) => ({ ...current, [panelId]: side }))
+      if (side === 'left') setLeftTab(panelId)
+      else setRightTab(panelId)
+    },
+    [setLayout],
+  )
+
+  /** Brings a panel forward wherever it currently lives. */
+  const showPanel = useCallback(
+    (panelId: PanelId) => {
+      if (layout[panelId] === 'left') setLeftTab(panelId)
+      else setRightTab(panelId)
+    },
+    [layout],
+  )
   // Dock sizes survive restarts, the way a Qt application remembers its layout.
   const [leftWidth, setLeftWidth] = useStickySize('dock.left', 280)
   const [rightWidth, setRightWidth] = useStickySize('dock.right', 300)
@@ -279,11 +353,17 @@ export function App() {
         case 'tool:select': setTool('select'); break
         case 'tool:razor': setTool('razor'); break
         case 'tool:spacer': setTool('spacer'); break
-        case 'view:effects': setLeftTab('effects'); break
-        case 'view:subtitles': setLeftTab('subtitles'); break
-        case 'view:mixer': setRightTab('mixer'); break
-        case 'view:inspector': setRightTab('inspector'); break
-        case 'view:agent': setRightTab('agent'); break
+        case 'view:effects': showPanel('effects'); break
+        case 'view:subtitles': showPanel('subtitles'); break
+        case 'view:resetLayout':
+          setLayout(() => ({ ...DEFAULT_LAYOUT }))
+          setLeftTab('media')
+          setRightTab('inspector')
+          setStatus({ text: 'Panels back where they started', tone: 'ok' })
+          break
+        case 'view:mixer': showPanel('mixer'); break
+        case 'view:inspector': showPanel('inspector'); break
+        case 'view:agent': showPanel('agent'); break
         case 'playhead:start': setPlayhead(0); break
         case 'playhead:end': setPlayhead(Math.max(0, totalFrames - 1)); break
         case 'help:mcp':
@@ -300,6 +380,7 @@ export function App() {
   }, [
     run, exportVideo, selectAll, deleteSelection, splitAtPlayhead, addTextAtPlayhead,
     addMarkerAtPlayhead, timelineId, totalFrames, state.mcp, setStatus, selectedClipIds, player,
+    showPanel, setLayout,
   ])
 
   // --- Keyboard: only what the menu does not already own. ------------------
@@ -356,6 +437,161 @@ export function App() {
     return <div className="empty">Loading project…</div>
   }
 
+  /**
+   * Every dockable panel, with where it currently lives.
+   *
+   * The content is built lazily per render so a panel keeps working wherever
+   * it is dragged — nothing about these bodies knows which dock it is in.
+   */
+  const PANELS: DockPanel[] = [
+    {
+      id: 'media',
+      label: 'Project bin',
+      render: () => (
+          <MediaPanel
+            assets={project.assets}
+            thumbnails={state.thumbnails}
+            selectedAssetIds={selectedAssetIds}
+            onSelect={(assetId, additive) =>
+              setSelectedAssetIds((current) =>
+                additive
+                  ? current.includes(assetId)
+                    ? current.filter((id) => id !== assetId)
+                    : [...current, assetId]
+                  : [assetId],
+              )
+            }
+            onMulticam={createMulticam}
+            onImport={() => void run(() => window.palmier.media.import())}
+            onRemove={(assetId) => void run(() => window.palmier.ops.removeAssets({ assetIds: [assetId] }))}
+            onError={(message) => setStatus({ text: message, tone: 'error' })}
+            onDone={(message) => {
+              setStatus({ text: message, tone: 'ok' })
+              void refresh()
+            }}
+          />
+      ),
+    },
+    {
+      id: 'effects',
+      label: 'Effects',
+      render: () => (
+          <EffectsPanel selectionCount={selectedClipIds.length} onAdd={(id) => addEffect(id)} />
+      ),
+    },
+    {
+      id: 'subtitles',
+      label: 'Subtitles',
+      render: () => (
+          <SubtitlePanel
+            timeline={timeline}
+            cues={cues}
+            playhead={clampedPlayhead}
+            selectedClipIds={selectedClipIds}
+            onImport={importSubtitles}
+            onExport={() => void run(() => window.palmier.subtitles.export())}
+            onAdd={addSubtitleAtPlayhead}
+            onSelect={(clipId) => setSelectedClipIds([clipId])}
+            onSeek={setPlayhead}
+            onEdit={(clipId, content) =>
+              void run(() => window.palmier.ops.updateText({ timelineId, clipId, content }))
+            }
+            onRemove={(clipId) =>
+              void run(() => window.palmier.ops.removeClips({ timelineId, clipIds: [clipId] }))
+            }
+          />
+      ),
+    },
+    {
+      id: 'inspector',
+      label: 'Inspector',
+      render: () => (
+          <Inspector
+            timeline={timeline}
+            clips={selectedClips}
+            assets={project.assets}
+            onApply={applyToSelection}
+            onUpdateText={(clipId, content) =>
+              void run(() => window.palmier.ops.updateText({ timelineId, clipId, content }))
+            }
+            onSetTimelineSettings={(settings) =>
+              void run(() => window.palmier.ops.setProjectSettings({ timelineId, ...settings }))
+            }
+            onSetEffectParams={(clipId, effectId, params) =>
+              void run(() => window.palmier.ops.setEffectParams({ timelineId, clipId, effectId, params }))
+            }
+            playhead={clampedPlayhead}
+            onSwitchAngle={(clipId, angleIndex, frame) =>
+              void run(() => window.palmier.ops.switchAngle({ timelineId, clipId, angleIndex, frame }))
+            }
+            onSetEffectCurve={(clipId, effectId, channel, points) =>
+              void run(() =>
+                window.palmier.ops.setEffectCurve({ timelineId, clipId, effectId, channel, points }),
+              )
+            }
+            onToggleEffect={(clipId, effectId, enabled) =>
+              void run(() => window.palmier.ops.setEffectParams({ timelineId, clipId, effectId, enabled }))
+            }
+            onRemoveEffect={(clipId, effectId) =>
+              void run(() => window.palmier.ops.removeEffect({ timelineId, clipId, effectId }))
+            }
+            onReorderEffect={(clipId, effectId, toIndex) =>
+              void run(() => window.palmier.ops.reorderEffect({ timelineId, clipId, effectId, toIndex }))
+            }
+            onSetTransition={(clipId, kind, durationFrames) =>
+              void run(() => window.palmier.ops.addTransition({ timelineId, clipId, kind, durationFrames }))
+            }
+            onRemoveTransition={(clipId) =>
+              void run(() => window.palmier.ops.removeTransition({ timelineId, clipId }))
+            }
+            onTrim={(clipId, kind, deltaFrames, edge) =>
+              void run(() => window.palmier.ops.trimClip({ timelineId, clipId, kind, deltaFrames, edge }))
+            }
+          />
+      ),
+    },
+    {
+      id: 'mixer',
+      label: 'Mixer',
+      render: () => (
+          <div className="panel">
+            <div className="panel-title">
+              <span>{timeline.tracks.length} tracks</span>
+            </div>
+            <div className="panel-body">
+              <AudioMixer
+                timeline={timeline}
+                onSetGain={(trackId, volume) =>
+                  void run(() => window.palmier.ops.setTrackFlags({ timelineId, trackId, volume }))
+                }
+                onToggleMute={(trackId, muted) =>
+                  void run(() => window.palmier.ops.setTrackFlags({ timelineId, trackId, muted }))
+                }
+              />
+            </div>
+          </div>
+      ),
+    },
+    {
+      id: 'agent',
+      label: 'Agent',
+      render: () => (
+          <AgentPanel
+            journal={state.journal}
+            onRevert={(entryId) =>
+              void run(async () => {
+                const result = await window.palmier.journal.revert(entryId)
+                return result.ok ? { ok: true, value: result.value.receipt } : result
+              })
+            }
+            onError={(message) => setStatus({ text: message, tone: 'error' })}
+          />
+      ),
+    },
+  ]
+
+  const panelsFor = (side: DockSide) => PANELS.filter((panel) => layout[panel.id] === side)
+
   const clipCount = project.timelines.reduce(
     (sum, t) => sum + t.tracks.reduce((s, track) => s + track.clips.length, 0),
     0,
@@ -390,81 +626,22 @@ export function App() {
 
       <div
         className="workspace"
-        style={{ gridTemplateColumns: `${leftWidth}px auto minmax(0, 1fr) auto ${rightWidth}px` }}
+        // An emptied dock keeps a narrow strip rather than disappearing: with
+        // nowhere to drop a tab, a panel dragged out would be unreachable.
+        style={{
+          gridTemplateColumns:
+            `${panelsFor('left').length > 0 ? leftWidth : EMPTY_DOCK_WIDTH}px auto ` +
+            `minmax(0, 1fr) auto ` +
+            `${panelsFor('right').length > 0 ? rightWidth : EMPTY_DOCK_WIDTH}px`,
+        }}
       >
-        <div className="panel side">
-          <div className="tabs" role="tablist">
-            <button
-              role="tab"
-              aria-selected={leftTab === 'media'}
-              className={leftTab === 'media' ? 'on' : ''}
-              onClick={() => setLeftTab('media')}
-            >
-              Project bin
-            </button>
-            <button
-              role="tab"
-              aria-selected={leftTab === 'effects'}
-              className={leftTab === 'effects' ? 'on' : ''}
-              onClick={() => setLeftTab('effects')}
-            >
-              Effects
-            </button>
-            <button
-              role="tab"
-              aria-selected={leftTab === 'subtitles'}
-              className={leftTab === 'subtitles' ? 'on' : ''}
-              onClick={() => setLeftTab('subtitles')}
-            >
-              Subtitles
-            </button>
-          </div>
-
-          {leftTab === 'media' ? (
-            <MediaPanel
-              assets={project.assets}
-              thumbnails={state.thumbnails}
-              selectedAssetIds={selectedAssetIds}
-              onSelect={(assetId, additive) =>
-                setSelectedAssetIds((current) =>
-                  additive
-                    ? current.includes(assetId)
-                      ? current.filter((id) => id !== assetId)
-                      : [...current, assetId]
-                    : [assetId],
-                )
-              }
-              onMulticam={createMulticam}
-              onImport={() => void run(() => window.palmier.media.import())}
-              onRemove={(assetId) => void run(() => window.palmier.ops.removeAssets({ assetIds: [assetId] }))}
-              onError={(message) => setStatus({ text: message, tone: 'error' })}
-              onDone={(message) => {
-                setStatus({ text: message, tone: 'ok' })
-                void refresh()
-              }}
-            />
-          ) : leftTab === 'effects' ? (
-            <EffectsPanel selectionCount={selectedClipIds.length} onAdd={(id) => addEffect(id)} />
-          ) : (
-            <SubtitlePanel
-              timeline={timeline}
-              cues={cues}
-              playhead={clampedPlayhead}
-              selectedClipIds={selectedClipIds}
-              onImport={importSubtitles}
-              onExport={() => void run(() => window.palmier.subtitles.export())}
-              onAdd={addSubtitleAtPlayhead}
-              onSelect={(clipId) => setSelectedClipIds([clipId])}
-              onSeek={setPlayhead}
-              onEdit={(clipId, content) =>
-                void run(() => window.palmier.ops.updateText({ timelineId, clipId, content }))
-              }
-              onRemove={(clipId) =>
-                void run(() => window.palmier.ops.removeClips({ timelineId, clipIds: [clipId] }))
-              }
-            />
-          )}
-        </div>
+        <Dock
+          side="left"
+          panels={panelsFor('left')}
+          activeId={leftTab}
+          onActivate={setLeftTab}
+          onAdopt={(panelId) => movePanel(panelId, 'left')}
+        />
 
         <Splitter
           orientation="vertical"
@@ -516,107 +693,13 @@ export function App() {
           label="Resize the right dock"
         />
 
-        <div className="panel side">
-          <div className="tabs" role="tablist">
-            <button
-              role="tab"
-              aria-selected={rightTab === 'inspector'}
-              className={rightTab === 'inspector' ? 'on' : ''}
-              onClick={() => setRightTab('inspector')}
-            >
-              Inspector
-            </button>
-            <button
-              role="tab"
-              aria-selected={rightTab === 'mixer'}
-              className={rightTab === 'mixer' ? 'on' : ''}
-              onClick={() => setRightTab('mixer')}
-            >
-              Mixer
-            </button>
-            <button
-              role="tab"
-              aria-selected={rightTab === 'agent'}
-              className={rightTab === 'agent' ? 'on' : ''}
-              onClick={() => setRightTab('agent')}
-            >
-              Agent
-            </button>
-          </div>
-
-          {rightTab === 'inspector' ? (
-            <Inspector
-              timeline={timeline}
-              clips={selectedClips}
-              assets={project.assets}
-              onApply={applyToSelection}
-              onUpdateText={(clipId, content) =>
-                void run(() => window.palmier.ops.updateText({ timelineId, clipId, content }))
-              }
-              onSetTimelineSettings={(settings) =>
-                void run(() => window.palmier.ops.setProjectSettings({ timelineId, ...settings }))
-              }
-              onSetEffectParams={(clipId, effectId, params) =>
-                void run(() => window.palmier.ops.setEffectParams({ timelineId, clipId, effectId, params }))
-              }
-              playhead={clampedPlayhead}
-              onSwitchAngle={(clipId, angleIndex, frame) =>
-                void run(() => window.palmier.ops.switchAngle({ timelineId, clipId, angleIndex, frame }))
-              }
-              onSetEffectCurve={(clipId, effectId, channel, points) =>
-                void run(() =>
-                  window.palmier.ops.setEffectCurve({ timelineId, clipId, effectId, channel, points }),
-                )
-              }
-              onToggleEffect={(clipId, effectId, enabled) =>
-                void run(() => window.palmier.ops.setEffectParams({ timelineId, clipId, effectId, enabled }))
-              }
-              onRemoveEffect={(clipId, effectId) =>
-                void run(() => window.palmier.ops.removeEffect({ timelineId, clipId, effectId }))
-              }
-              onReorderEffect={(clipId, effectId, toIndex) =>
-                void run(() => window.palmier.ops.reorderEffect({ timelineId, clipId, effectId, toIndex }))
-              }
-              onSetTransition={(clipId, kind, durationFrames) =>
-                void run(() => window.palmier.ops.addTransition({ timelineId, clipId, kind, durationFrames }))
-              }
-              onRemoveTransition={(clipId) =>
-                void run(() => window.palmier.ops.removeTransition({ timelineId, clipId }))
-              }
-              onTrim={(clipId, kind, deltaFrames, edge) =>
-                void run(() => window.palmier.ops.trimClip({ timelineId, clipId, kind, deltaFrames, edge }))
-              }
-            />
-          ) : rightTab === 'agent' ? (
-            <AgentPanel
-              journal={state.journal}
-              onRevert={(entryId) =>
-                void run(async () => {
-                  const result = await window.palmier.journal.revert(entryId)
-                  return result.ok ? { ok: true, value: result.value.receipt } : result
-                })
-              }
-              onError={(message) => setStatus({ text: message, tone: 'error' })}
-            />
-          ) : (
-            <div className="panel">
-              <div className="panel-title">
-                <span>{timeline.tracks.length} tracks</span>
-              </div>
-              <div className="panel-body">
-                <AudioMixer
-                  timeline={timeline}
-                  onSetGain={(trackId, volume) =>
-                    void run(() => window.palmier.ops.setTrackFlags({ timelineId, trackId, volume }))
-                  }
-                  onToggleMute={(trackId, muted) =>
-                    void run(() => window.palmier.ops.setTrackFlags({ timelineId, trackId, muted }))
-                  }
-                />
-              </div>
-            </div>
-          )}
-        </div>
+        <Dock
+          side="right"
+          panels={panelsFor('right')}
+          activeId={rightTab}
+          onActivate={setRightTab}
+          onAdopt={(panelId) => movePanel(panelId, 'right')}
+        />
       </div>
 
       <Splitter
