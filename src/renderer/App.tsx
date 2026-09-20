@@ -6,6 +6,7 @@ import type { MenuCommand } from '../main/menu.js'
 import { AudioMixer } from './components/AudioMixer.js'
 import { DropZone } from './components/DropZone.js'
 import { EffectsPanel } from './components/EffectsPanel.js'
+import { AgentPanel } from './components/AgentPanel.js'
 import { Inspector } from './components/Inspector.js'
 import { MediaPanel } from './components/MediaPanel.js'
 import { Monitors } from './components/Monitors.js'
@@ -17,7 +18,7 @@ import { useEditor, usePreviewFrame } from './state.js'
 import { usePlayer } from './usePlayer.js'
 
 type LeftTab = 'media' | 'effects'
-type RightTab = 'inspector' | 'mixer'
+type RightTab = 'inspector' | 'mixer' | 'agent'
 
 /** Dock size remembered across sessions, like a Qt application's layout. */
 function useStickySize(key: string, fallback: number): [number, (value: number) => void] {
@@ -193,6 +194,7 @@ export function App() {
         case 'view:effects': setLeftTab('effects'); break
         case 'view:mixer': setRightTab('mixer'); break
         case 'view:inspector': setRightTab('inspector'); break
+        case 'view:agent': setRightTab('agent'); break
         case 'playhead:start': setPlayhead(0); break
         case 'playhead:end': setPlayhead(Math.max(0, totalFrames - 1)); break
         case 'help:mcp':
@@ -381,6 +383,14 @@ export function App() {
             >
               Mixer
             </button>
+            <button
+              role="tab"
+              aria-selected={rightTab === 'agent'}
+              className={rightTab === 'agent' ? 'on' : ''}
+              onClick={() => setRightTab('agent')}
+            >
+              Agent
+            </button>
           </div>
 
           {rightTab === 'inspector' ? (
@@ -416,6 +426,17 @@ export function App() {
               onTrim={(clipId, kind, deltaFrames, edge) =>
                 void run(() => window.palmier.ops.trimClip({ timelineId, clipId, kind, deltaFrames, edge }))
               }
+            />
+          ) : rightTab === 'agent' ? (
+            <AgentPanel
+              journal={state.journal}
+              onRevert={(entryId) =>
+                void run(async () => {
+                  const result = await window.palmier.journal.revert(entryId)
+                  return result.ok ? { ok: true, value: result.value.receipt } : result
+                })
+              }
+              onError={(message) => setStatus({ text: message, tone: 'error' })}
             />
           ) : (
             <div className="panel">

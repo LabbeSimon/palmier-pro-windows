@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { activeTimeline, type Project, type Timeline } from '../core/model.js'
 import type { Receipt } from '../core/ops.js'
 import type { IpcResult, RenderProgress, Snapshot } from '../preload/index.js'
+import type { JournalEntry } from '../main/project/store.js'
 
 export interface StatusMessage {
   text: string
@@ -14,6 +15,7 @@ export interface EditorState {
   timeline: Timeline | null
   dirty: boolean
   history: { undo: string[]; redo: string[] }
+  journal: JournalEntry[]
   mcp: Snapshot['mcp']
   status: StatusMessage | null
   thumbnails: Record<string, string>
@@ -31,6 +33,7 @@ export function useEditor() {
     timeline: null,
     dirty: false,
     history: { undo: [], redo: [] },
+    journal: [],
     mcp: { running: false, endpoint: null, error: null },
     status: null,
     thumbnails: {},
@@ -44,6 +47,7 @@ export function useEditor() {
       timeline: activeTimeline(snapshot.project),
       dirty: snapshot.dirty,
       history: snapshot.history,
+      journal: snapshot.journal,
       mcp: snapshot.mcp,
     }))
   }, [])

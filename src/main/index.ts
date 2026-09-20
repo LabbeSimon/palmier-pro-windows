@@ -12,6 +12,9 @@ import { FFmpegError, ffmpegVersion, generateThumbnail, probeAsset, renderAssetF
 import { buildMenu } from './menu.js'
 import { existingPreview, fingerprintTimeline, renderPreview, type PreviewJob } from './media/preview.js'
 import { MCPServer, DEFAULT_MCP_PORT } from './mcp/server.js'
+import { TOOLS_BY_NAME } from './mcp/tools.js'
+import { AgentSession, type AgentEvent } from './agent/session.js'
+import { DEFAULT_MODEL, MODELS, readApiKey, readSettings, writeSettings } from './agent/settings.js'
 import { basename } from 'node:path'
 import { cacheDirFor, isProjectFolder, loadProject, ProjectStore, saveProject } from './project/store.js'
 
@@ -97,7 +100,7 @@ function ensureThumbnails(project: Project): void {
 }
 
 store.on('changed', (project: Project, receipt: Receipt) => {
-  window?.webContents.send('project:changed', { project, receipt })
+  window?.webContents.send('project:changed', { project, receipt, journal: store.journal })
   ensureThumbnails(project)
 })
 
@@ -133,6 +136,7 @@ const snapshot = () => ({
   project: store.project,
   dirty: store.isDirty,
   history: store.history,
+  journal: store.journal,
   mcp: mcpStatus,
 })
 
@@ -217,35 +221,128 @@ handle('project:redo', () => {
 
 // --- Timeline mutations. The renderer never edits state directly. ----------
 
-handle('ops:addClips', (args) => store.apply((p) => ops.addClips(p, args)))
-handle('ops:removeClips', (args) => store.apply((p) => ops.removeClips(p, args)))
-handle('ops:splitClips', (args) => store.apply((p) => ops.splitClips(p, args)))
-handle('ops:moveClips', (args) => store.apply((p) => ops.moveClips(p, args)))
-handle('ops:setClipProperties', (args) => store.apply((p) => ops.setClipProperties(p, args)))
-handle('ops:addTexts', (args) => store.apply((p) => ops.addTexts(p, args)))
-handle('ops:updateText', (args) => store.apply((p) => ops.updateText(p, args)))
-handle('ops:addTrack', (args) => store.apply((p) => ops.addTrack(p, args)))
-handle('ops:removeTrack', (args) => store.apply((p) => ops.removeTrack(p, args.trackId, args.timelineId)))
-handle('ops:setTrackFlags', (args) => store.apply((p) => ops.setTrackFlags(p, args)))
-handle('ops:addMarkers', (args) => store.apply((p) => ops.addMarkers(p, args)))
-handle('ops:createTimeline', (args) => store.apply((p) => ops.createTimeline(p, args)))
-handle('ops:setActiveTimeline', (args) => store.apply((p) => ops.setActiveTimeline(p, args.timelineId)))
-handle('ops:setProjectSettings', (args) => store.apply((p) => ops.setProjectSettings(p, args)))
-handle('ops:removeAssets', (args) => store.apply((p) => ops.removeAssets(p, args.assetIds)))
-handle('ops:shiftClips', (args) => store.apply((p) => ops.shiftClips(p, args)))
-handle('ops:setWorkZone', (args) => store.apply((p) => ops.setWorkZone(p, args)))
-handle('ops:groupClips', (args) => store.apply((p) => ops.groupClips(p, args)))
-handle('ops:ungroupClips', (args) => store.apply((p) => ops.ungroupClips(p, args)))
-handle('ops:trimClip', (args) => store.apply((p) => ops.trimClip(p, args)))
-handle('ops:setKeyframe', (args) => store.apply((p) => ops.setKeyframe(p, args)))
-handle('ops:moveKeyframe', (args) => store.apply((p) => ops.moveKeyframe(p, args)))
-handle('ops:removeKeyframe', (args) => store.apply((p) => ops.removeKeyframe(p, args)))
-handle('ops:addEffect', (args) => store.apply((p) => ops.addEffect(p, args)))
-handle('ops:removeEffect', (args) => store.apply((p) => ops.removeEffect(p, args)))
-handle('ops:setEffectParams', (args) => store.apply((p) => ops.setEffectParams(p, args)))
-handle('ops:reorderEffect', (args) => store.apply((p) => ops.reorderEffect(p, args)))
-handle('ops:addTransition', (args) => store.apply((p) => ops.addTransition(p, args)))
-handle('ops:removeTransition', (args) => store.apply((p) => ops.removeTransition(p, args)))
+/**
+ * Editing operations reachable from the UI, by name.
+ *
+ * A table rather than 29 separate registrations because the journal has to be
+ * able to re-run any of them during a revert, which needs a name it can look up.
+ */
+const UI_OPS: Record<string, (project: Project, args: any) => ops.MutationResult> = {
+  addClips: ops.addClips,
+  removeClips: ops.removeClips,
+  splitClips: ops.splitClips,
+  moveClips: ops.moveClips,
+  setClipProperties: ops.setClipProperties,
+  addTexts: ops.addTexts,
+  updateText: ops.updateText,
+  addTrack: ops.addTrack,
+  removeTrack: (p, a) => ops.removeTrack(p, a.trackId, a.timelineId),
+  setTrackFlags: ops.setTrackFlags,
+  addMarkers: ops.addMarkers,
+  createTimeline: ops.createTimeline,
+  setActiveTimeline: (p, a) => ops.setActiveTimeline(p, a.timelineId),
+  setProjectSettings: ops.setProjectSettings,
+  removeAssets: (p, a) => ops.removeAssets(p, a.assetIds),
+  shiftClips: ops.shiftClips,
+  setWorkZone: ops.setWorkZone,
+  groupClips: ops.groupClips,
+  ungroupClips: ops.ungroupClips,
+  trimClip: ops.trimClip,
+  setKeyframe: ops.setKeyframe,
+  moveKeyframe: ops.moveKeyframe,
+  removeKeyframe: ops.removeKeyframe,
+  addEffect: ops.addEffect,
+  removeEffect: ops.removeEffect,
+  setEffectParams: ops.setEffectParams,
+  reorderEffect: ops.reorderEffect,
+  addTransition: ops.addTransition,
+  removeTransition: ops.removeTransition,
+}
+
+for (const [name, operation] of Object.entries(UI_OPS)) {
+  handle(`ops:${name}`, (args) =>
+    store.apply((p) => operation(p, args), { source: 'ui', name, args }),
+  )
+}
+
+/**
+ * Re-runs one recorded edit against a given project.
+ *
+ * A tool is replayed through its own handler on a throwaway store, so the replay
+ * takes exactly the path the original call took — no second implementation of
+ * what `add_clips` means that could drift from the first.
+ */
+async function replay(
+  source: 'ui' | 'agent' | 'mcp',
+  name: string,
+  args: unknown,
+  project: Project,
+): Promise<ops.MutationResult> {
+  if (source === 'ui') {
+    const operation = UI_OPS[name]
+    if (!operation) throw new OpError('not_found', `unknown operation "${name}"`)
+    return operation(project, args)
+  }
+
+  const tool = TOOLS_BY_NAME.get(name)
+  if (!tool) throw new OpError('not_found', `unknown tool "${name}"`)
+  const scratch = new ProjectStore(project)
+  let receipt: Receipt | null = null
+  scratch.on('changed', (_project: Project, emitted: Receipt) => {
+    receipt = emitted
+  })
+  await tool.handler((args ?? {}) as Record<string, any>, {
+    store: scratch,
+    defaultExportDir: app.getPath('videos'),
+  })
+  if (!receipt) {
+    throw new OpError('refused', `"${name}" changed nothing when re-run`)
+  }
+  return { project: scratch.project, receipt }
+}
+
+store.setReplayer(replay)
+
+// --- Agent ----------------------------------------------------------------
+
+let agent: AgentSession | null = null
+
+function agentSession(): AgentSession {
+  if (!agent) {
+    agent = new AgentSession(store, { store, defaultExportDir: app.getPath('videos') })
+    agent.on('event', (event: AgentEvent) => window?.webContents.send('agent:event', event))
+  }
+  return agent
+}
+
+handle('agent:settings', async () => ({ ...(await readSettings()), models: MODELS }))
+handle('agent:configure', async (update: { model?: string; apiKey?: string }) => {
+  await writeSettings(update)
+  return { ...(await readSettings()), models: MODELS }
+})
+
+handle('agent:send', async (prompt: string) => {
+  const settings = await readSettings()
+  const apiKey = await readApiKey()
+  await agentSession().send(prompt, { apiKey, model: settings.model || DEFAULT_MODEL })
+  return { done: true }
+})
+
+handle('agent:cancel', () => {
+  agent?.cancel()
+  return { cancelled: true }
+})
+
+handle('agent:clear', () => {
+  agent?.clear()
+  return { cleared: true }
+})
+
+handle('journal:list', () => store.journal)
+handle('journal:revert', async (entryId: string) => {
+  const receipt = await store.revertEntry(entryId)
+  return { receipt, journal: store.journal }
+})
 
 // --- Media ----------------------------------------------------------------
 

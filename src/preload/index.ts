@@ -3,11 +3,14 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { Project } from '../core/model.js'
 import type { Receipt } from '../core/ops.js'
 import type { MenuCommand } from '../main/menu.js'
+import type { JournalEntry } from '../main/project/store.js'
+import type { AgentEvent } from '../main/agent/session.js'
 
 export interface Snapshot {
   project: Project
   dirty: boolean
   history: { undo: string[]; redo: string[] }
+  journal: JournalEntry[]
   mcp: { running: boolean; endpoint: string | null; error: string | null }
 }
 
@@ -50,8 +53,9 @@ const api = {
     save: (saveAs?: boolean) => invoke<Snapshot>('project:save', saveAs),
     undo: () => invoke<Snapshot>('project:undo'),
     redo: () => invoke<Snapshot>('project:redo'),
-    onChanged: (listener: (payload: { project: Project; receipt: Receipt }) => void) =>
-      subscribe('project:changed', listener),
+    onChanged: (
+      listener: (payload: { project: Project; receipt: Receipt; journal: JournalEntry[] }) => void,
+    ) => subscribe('project:changed', listener),
   },
   ops: {
     addClips: (args: unknown) => invoke<Receipt>('ops:addClips', args),
@@ -83,6 +87,26 @@ const api = {
     reorderEffect: (args: unknown) => invoke<Receipt>('ops:reorderEffect', args),
     addTransition: (args: unknown) => invoke<Receipt>('ops:addTransition', args),
     removeTransition: (args: unknown) => invoke<Receipt>('ops:removeTransition', args),
+  },
+  agent: {
+    settings: () =>
+      invoke<{ model: string; hasKey: boolean; models: readonly { id: string; label: string }[] }>(
+        'agent:settings',
+      ),
+    configure: (update: { model?: string; apiKey?: string }) =>
+      invoke<{ model: string; hasKey: boolean; models: readonly { id: string; label: string }[] }>(
+        'agent:configure',
+        update,
+      ),
+    send: (prompt: string) => invoke<{ done: boolean }>('agent:send', prompt),
+    cancel: () => invoke<{ cancelled: boolean }>('agent:cancel'),
+    clear: () => invoke<{ cleared: boolean }>('agent:clear'),
+    onEvent: (listener: (event: AgentEvent) => void) => subscribe('agent:event', listener),
+  },
+  journal: {
+    list: () => invoke<JournalEntry[]>('journal:list'),
+    revert: (entryId: string) =>
+      invoke<{ receipt: Receipt; journal: JournalEntry[] }>('journal:revert', entryId),
   },
   media: {
     import: (paths?: string[]) => invoke<Receipt>('media:import', paths),

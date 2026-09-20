@@ -1550,3 +1550,207 @@ input[type='range']:hover::-webkit-slider-thumb {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+
+/* --- Agent panel ----------------------------------------------------------
+   A conversation that edits the timeline directly, with the action journal
+   underneath as the way back out of anything it did.                        */
+
+.agent-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-panel);
+}
+
+.agent-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.agent-head select {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-caption);
+}
+
+.agent-chip {
+  flex: 0 0 auto;
+  padding: 2px var(--space-2);
+  font-size: var(--fs-caption);
+  color: var(--text-muted);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.agent-chip:hover:not(:disabled) { color: var(--text); border-color: var(--border-strong); }
+.agent-chip.open { border-color: var(--accent); }
+.agent-chip:disabled { opacity: 0.45; cursor: default; }
+
+/* Missing key is the one state that blocks the panel, so it says so in amber
+   rather than sitting quietly among the other controls. */
+.agent-chip.missing { color: var(--warn); border-color: var(--warn); }
+
+.agent-settings {
+  padding: var(--space-2);
+  background: var(--bg-app);
+  border-bottom: 1px solid var(--border);
+}
+
+.agent-key {
+  display: flex;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+.agent-key input { flex: 1; min-width: 0; font-family: var(--font-mono); }
+
+.agent-log {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  padding: var(--space-2);
+}
+
+.agent-msg {
+  margin-bottom: var(--space-2);
+  padding: var(--space-2);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  border-radius: var(--radius-md);
+}
+
+.agent-msg.user { background: var(--bg-raised); color: var(--text); }
+.agent-msg.assistant { background: transparent; padding: var(--space-1) var(--space-2); }
+.agent-msg.error { background: rgb(218 68 83 / 0.16); color: #f5a3ab; }
+
+/* Tool calls read as a log line, not as speech: they are what happened, not
+   what was said about it. */
+.agent-tool {
+  margin-bottom: var(--space-1);
+  border-left: 2px solid var(--accent-dim);
+}
+
+.agent-tool.failed { border-left-color: var(--danger); }
+
+.agent-tool-head {
+  display: flex;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 2px var(--space-2);
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.agent-tool-name {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  color: var(--accent);
+}
+
+.agent-tool-summary {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-caption);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-tool-args {
+  margin: 0;
+  padding: var(--space-1) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  color: var(--text-faint);
+  white-space: pre-wrap;
+}
+
+.agent-busy {
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-caption);
+  color: var(--text-faint);
+}
+
+.agent-input {
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.agent-input textarea {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  font-family: var(--font);
+  font-size: var(--fs-body);
+}
+
+.agent-journal {
+  flex: 0 0 auto;
+  max-height: 210px;
+  overflow-y: auto;
+  padding: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.agent-journal h4 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.agent-journal ul { margin: 0; padding: 0; list-style: none; }
+
+.journal-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 1px 0;
+}
+
+.journal-source {
+  flex: 0 0 34px;
+  font-size: var(--fs-caption);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-faint);
+}
+
+.journal-row.agent .journal-source { color: var(--accent); }
+.journal-row.mcp .journal-source { color: var(--clip-text); }
+
+.journal-summary {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-caption);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.link {
+  margin-top: var(--space-2);
+  padding: 0;
+  font-size: var(--fs-caption);
+  color: var(--accent);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}

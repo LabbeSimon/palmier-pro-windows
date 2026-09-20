@@ -228,7 +228,10 @@ export class MCPServer {
         }
         const args = (request.params?.arguments ?? {}) as Record<string, any>
         try {
-          const result = await tool.handler(args, this.ctx)
+          const result = await this.ctx.store.runAttributed(
+            { source: 'mcp', name, args },
+            () => tool.handler(args, this.ctx),
+          )
           return reply({
             content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
             structuredContent: result,

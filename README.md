@@ -37,6 +37,12 @@ licence: TypeScript, Electron and FFmpeg, written from scratch.
   buttons use, so there is no second implementation to drift.
 - **MCP server** on `http://127.0.0.1:19789/mcp`, 38 tools, bound to loopback only.
 - **Export** — H.264 / AAC MP4 with live progress and cancellation.
+- **Built-in agent** — a conversation panel that edits through the same 38 tools the MCP
+  server exposes, so its work lands on the same undo stack as yours. Needs your own Anthropic
+  API key, which is encrypted with the OS keystore.
+- **Action journal** — every edit with its source (you, the built-in agent, or an MCP client),
+  and undo for any single entry: the state before it is restored and the later edits are
+  re-run on top, with anything that no longer applies named rather than dropped in silence.
 - **Undo/redo** shared by the UI and the agent: an agent's edit is undoable from the toolbar,
   and a UI edit is undoable from the `undo` tool.
 
@@ -47,15 +53,17 @@ src/core/        Pure domain. No Electron, no Node, no I/O — this is where cor
   model.ts       Timeline / Track / Clip. Frames are the source of truth; seconds only at boundaries.
   ops.ts         Every mutation. UI, MCP and tests all go through these functions.
   effects.ts     Effect registry: parameters, bounds, and the FFmpeg filter each becomes.
+  keyframes.ts   Animation curves, interpolation, and the FFmpeg expression each compiles to.
   transitions.ts Transition rendering, resolved to alpha or geometry on the incoming clip.
   render.ts      Timeline -> FFmpeg argv. Pure, so the render graph is unit-testable without FFmpeg.
   timecode.ts    Frame <-> timecode conversion.
 
 src/main/      Electron main process.
-  project/store.ts  The single owner of mutable state, plus undo history and atomic save.
+  project/store.ts  The single owner of mutable state: undo history, action journal, atomic save.
   media/ffmpeg.ts   Process management: probe, thumbnails, render, progress, cancellation.
   mcp/server.ts     JSON-RPC 2.0 over Streamable HTTP.
   mcp/tools.ts      The tool surface.
+  agent/            The built-in agent: Anthropic client, tool loop, key storage.
 
 src/renderer/  React UI. Holds a read-only mirror of the store and mutates only through IPC.
 ```
@@ -73,10 +81,11 @@ Two rules hold the design together:
 `get_timeline` · `inspect_timeline` · `get_media` · `search_media` · `import_media` ·
 `create_timeline` · `set_active_timeline` · `set_project_settings` · `add_track` ·
 `set_track_flags` · `add_clips` · `remove_clips` · `split_clips` · `move_clips` ·
-`set_clip_properties` · `add_texts` · `update_text` · `add_markers` · `capture_frame` ·
-`export_project` · `undo` · `list_effects` · `apply_effect` · `get_clip_effects` ·
-`set_effect` · `remove_effect` · `reorder_effect` · `list_transitions` · `add_transition` ·
-`remove_transition`
+`set_clip_properties` · `add_texts` · `update_text` · `list_animatable` · `set_keyframe` ·
+`move_keyframe` · `remove_keyframe` · `trim_clip` · `group_clips` · `ungroup_clips` ·
+`set_work_zone` · `add_markers` · `capture_frame` · `export_project` · `undo` ·
+`list_effects` · `apply_effect` · `get_clip_effects` · `set_effect` · `remove_effect` ·
+`reorder_effect` · `list_transitions` · `add_transition` · `remove_transition`
 
 Tools refuse rather than improvise. An overlapping placement, a duration the media cannot
 supply, or a fade longer than its clip returns an actionable error and changes nothing —
@@ -100,7 +109,7 @@ success-shaped response, and they do not create an undo step.
 ```bash
 npm install
 npm run dev        # Electron with HMR on the renderer
-npm test           # 135 tests: domain, effects, render graph, timecode, MCP and FFmpeg end-to-end
+npm test           # 245 tests: domain, keyframes, render graph, MCP, agent and FFmpeg end-to-end
 npm run typecheck
 ```
 

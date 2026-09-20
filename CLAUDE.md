@@ -36,7 +36,8 @@ Fait et vérifié :
 - Barre de menus native, 38 outils MCP, bouton de connexion en un clic
 - Logo intégré : `.ico` multi-tailles dans l'exe, `.png` Linux
 - Keyframes : domaine, rendu, éditeur, MCP
-- 217 tests verts ; exe Windows signé non, mais construit et livré
+- Agent intégré + journal d'actions annulables une par une
+- 245 tests verts ; exe Windows signé non, mais construit et livré
 
 ---
 
@@ -109,13 +110,34 @@ et compare la signature de l'image aux frames 2 et 50 — une expression que
 FFmpeg accepte mais n'évalue qu'une fois est indiscernable d'un keyframe qui
 marche, sauf en comparant deux images.
 
-### Bloc 4 — Panneau agent intégré  ⬜
+### Bloc 4 — Panneau agent intégré  ✅ (20/09/2026)
 
 Le point qui distingue ce logiciel de Kdenlive.
 
-- [ ] Panneau de conversation dans l'app
-- [ ] L'agent voit la timeline et agit dessus en direct
-- [ ] Journal des actions de l'agent, annulables une par une
+- [x] **Panneau de conversation** : troisième onglet du dock droit
+      (`Ctrl+4`), réponse en streaming, appels d'outils repliables, bouton
+      d'arrêt. Modèle au choix : Opus 5 / Sonnet 5 / Haiku 4.5
+- [x] **L'agent agit en direct** : il appelle les **mêmes 38 outils** que le
+      serveur MCP, sur le même store — donc même pile d'annulation, mêmes
+      refus, et la timeline bouge sous les yeux de l'utilisateur
+- [x] **Journal des actions**, avec la provenance de chacune (UI / agent /
+      MCP) et une annulation **entrée par entrée**
+
+**Clé API** : fournie par l'utilisateur, chiffrée par le trousseau du système
+(DPAPI sous Windows). Si aucun trousseau n'est disponible, l'écriture est
+**refusée** plutôt que faite en clair — une clé en clair dans le profil est un
+vrai risque et l'utilisateur n'aurait aucun moyen de le savoir.
+
+**Annuler une action du milieu** ne peut pas être un simple retour au
+snapshot : ça jetterait tout ce qui a suivi. Le store restaure l'état d'avant,
+puis **rejoue les actions suivantes par-dessus**, en passant par le même code
+qu'à l'origine (le handler d'outil sur un store jetable) — pas de seconde
+implémentation de ce que veut dire « couper ». Ce qui ne peut plus s'appliquer
+est **nommé dans un avertissement**, jamais sauté en silence.
+
+Non vérifié : l'aller-retour réel avec l'API Anthropic. Le décodage du flux,
+la boucle d'outils, les refus et le plafond de tours sont couverts par 16 tests
+avec un transport bouchonné, mais aucune requête n'a été envoyée pour de vrai.
 
 ### Bloc 5 — Fonctions Kdenlive manquantes  🟡 (4/8)
 
