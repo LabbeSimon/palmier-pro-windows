@@ -11,6 +11,7 @@ import { OpError, type Receipt } from '../core/ops.js'
 import { FFmpegError, ffmpegVersion, generateThumbnail, probeAsset, renderAssetFrame, renderFrame, renderTimeline, type RenderHandle } from './media/ffmpeg.js'
 import { buildMenu } from './menu.js'
 import { existingPreview, fingerprintTimeline, renderPreview, type PreviewJob } from './media/preview.js'
+import { buildProxies, canProxy, existingProxy, PROXY_WIDTH, type ProxyJob } from './media/proxy.js'
 import { MCPServer, DEFAULT_MCP_PORT } from './mcp/server.js'
 import { TOOLS_BY_NAME } from './mcp/tools.js'
 import { AgentSession, type AgentEvent } from './agent/session.js'
@@ -261,6 +262,7 @@ const UI_OPS: Record<string, (project: Project, args: any) => ops.MutationResult
   addTransition: ops.addTransition,
   removeTransition: ops.removeTransition,
   addSubtitles: ops.addSubtitles,
+  setAssetProxies: ops.setAssetProxies,
 }
 
 for (const [name, operation] of Object.entries(UI_OPS)) {
@@ -340,6 +342,72 @@ handle('agent:cancel', () => {
 handle('agent:clear', () => {
   agent?.clear()
   return { cleared: true }
+})
+
+// --- Proxies --------------------------------------------------------------
+
+let activeProxyJob: ProxyJob | null = null
+
+handle('proxies:state', async () => {
+  const cacheDir = cacheDirFor(store.project.path)
+  const videos = store.project.assets.filter(canProxy)
+  const withProxy = await Promise.all(videos.map((asset) => existingProxy(asset, cacheDir)))
+  return {
+    total: videos.length,
+    ready: withProxy.filter(Boolean).length,
+    building: activeProxyJob !== null,
+    width: PROXY_WIDTH,
+  }
+})
+
+handle('proxies:build', async () => {
+  if (activeProxyJob) throw new OpError('refused', 'Proxies are already being built.')
+  const cacheDir = cacheDirFor(store.project.path)
+  const assets = store.project.assets.filter(canProxy)
+  if (assets.length === 0) {
+    throw new OpError('refused', 'This project has no video clip to proxy.')
+  }
+
+  const job = buildProxies(assets, cacheDir, (progress) =>
+    window?.webContents.send('proxies:progress', progress),
+  )
+  activeProxyJob = job
+  try {
+    const updated = await job.promise
+    if (updated.length === 0) {
+      return { built: 0, message: 'Every clip already had a current proxy' }
+    }
+    const args = {
+      proxies: updated.map((asset) => ({ assetId: asset.id, proxyPath: asset.proxyPath ?? null })),
+    }
+    const receipt = store.apply((p) => ops.setAssetProxies(p, args), {
+      source: 'ui',
+      name: 'setAssetProxies',
+      args,
+    })
+    return { built: updated.length, message: receipt.summary }
+  } finally {
+    activeProxyJob = null
+    window?.webContents.send('proxies:done')
+  }
+})
+
+handle('proxies:cancel', () => {
+  activeProxyJob?.cancel()
+  return { cancelled: activeProxyJob !== null }
+})
+
+/** Drops the proxy paths so the editor reads originals again. Files stay cached. */
+handle('proxies:clear', () => {
+  const proxied = store.project.assets.filter((asset) => asset.proxyPath)
+  if (proxied.length === 0) return { message: 'No clip is using a proxy' }
+  const args = { proxies: proxied.map((asset) => ({ assetId: asset.id, proxyPath: null })) }
+  const receipt = store.apply((p) => ops.setAssetProxies(p, args), {
+    source: 'ui',
+    name: 'setAssetProxies',
+    args,
+  })
+  return { message: `${proxied.length} clip(s) back on their originals — ${receipt.summary}` }
 })
 
 // --- Subtitles ------------------------------------------------------------

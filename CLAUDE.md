@@ -33,12 +33,12 @@ Fait et vérifié :
 - Import vidéo = image + son en clips liés
 - Glisser-déposer depuis l'explorateur
 - Double moniteur clip / projet, mixeur audio en dB
-- Barre de menus native, 42 outils MCP, bouton de connexion en un clic
+- Barre de menus native, 43 outils MCP, bouton de connexion en un clic
 - Logo intégré : `.ico` multi-tailles dans l'exe, `.png` Linux
 - Keyframes : domaine, rendu, éditeur, MCP
 - Agent intégré + journal d'actions annulables une par une
 - Sous-titres SRT/VTT, étalonnage courbes + roues
-- 290 tests verts ; exe Windows signé non, mais construit et livré
+- 301 tests verts ; exe Windows signé non, mais construit et livré
 
 ---
 
@@ -140,7 +140,7 @@ Non vérifié : l'aller-retour réel avec l'API Anthropic. Le décodage du flux,
 la boucle d'outils, les refus et le plafond de tours sont couverts par 16 tests
 avec un transport bouchonné, mais aucune requête n'a été envoyée pour de vrai.
 
-### Bloc 5 — Fonctions Kdenlive manquantes  🟡 (6/8)
+### Bloc 5 — Fonctions Kdenlive manquantes  🟡 (7/8)
 
 - [x] **Groupes de clips** — `Ctrl+G` / `Ctrl+Shift+G`, liseré ambre sur les
       clips groupés ; un groupe fusionne au lieu de s'imbriquer
@@ -149,7 +149,13 @@ avec un transport bouchonné, mais aucune requête n'a été envoyée pour de vr
       timeline et en MCP. L'écrasement découpe proprement le clip dessous
 - [x] **Trim avancé** : ripple, roll, slip, slide — dans l'inspecteur et en MCP,
       chacun refusé avec le chiffre exact quand la poignée ou le voisin manque
-- [ ] Proxy clips pour le montage sur machine modeste
+- [x] **Proxy clips** : transcodage 640 px **tout-intra** (`-g 1`), cache
+      indexé par chemin + taille + mtime — remplacer un fichier invalide son
+      proxy au lieu de monter sur une ancienne image. La preview et le moniteur
+      lisent le proxy, **l'export lit toujours l'original** : c'est la seule
+      règle qui compte, et elle est vérifiée sur l'argv dans les tests.
+      Mesuré : un proxy tout-intra est **plus lourd** que la source, pas plus
+      léger — d'où le refus de proxyfier ce qui est déjà ≤ 640 px
 - [x] **Étalonnage** : correcteur trois bandes (ombres / médiums / hautes
       lumières) avec **roues à tirer**, et courbes de tonalité master + R/V/B
       avec **points déplaçables**. Un canal laissé droit ne coûte aucune passe

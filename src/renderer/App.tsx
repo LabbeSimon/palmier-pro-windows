@@ -356,6 +356,11 @@ export function App() {
               onSelect={setSelectedAssetId}
               onImport={() => void run(() => window.palmier.media.import())}
               onRemove={(assetId) => void run(() => window.palmier.ops.removeAssets({ assetIds: [assetId] }))}
+              onError={(message) => setStatus({ text: message, tone: 'error' })}
+              onDone={(message) => {
+                setStatus({ text: message, tone: 'ok' })
+                void refresh()
+              }}
             />
           ) : leftTab === 'effects' ? (
             <EffectsPanel selectionCount={selectedClipIds.length} onAdd={(id) => addEffect(id)} />

@@ -1929,3 +1929,41 @@ input[type='range']:hover::-webkit-slider-thumb {
   color: var(--text-faint);
   white-space: nowrap;
 }
+
+/* --- Proxies --------------------------------------------------------------
+   Editing stand-ins. The bar states plainly how many exist, because the whole
+   point is knowing whether what you are watching is the real picture.        */
+
+.proxy-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  background: var(--bg-app);
+  border-bottom: 1px solid var(--border);
+}
+
+.proxy-state {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-caption);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.proxy-bar button {
+  flex: 0 0 auto;
+  padding: 1px var(--space-2);
+  font-size: var(--fs-caption);
+}
+
+.proxy-badge {
+  margin-left: var(--space-1);
+  padding: 0 3px;
+  font-size: var(--fs-caption);
+  color: var(--accent);
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--radius-sm);
+}

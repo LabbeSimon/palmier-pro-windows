@@ -36,6 +36,11 @@ export interface RenderOptions {
   endFrame?: number
   /** Skip the audio graph entirely. Used by still-frame capture. */
   videoOnly?: boolean
+  /**
+   * Read proxy files where they exist. Preview and playback set this; export
+   * never does, so what is delivered is always built from the originals.
+   */
+  useProxies?: boolean
 }
 
 export interface Sidecar {
@@ -135,6 +140,17 @@ interface ResolvedClip {
   previous: Clip | null
   /** Bottom-up composite order. */
   layer: number
+}
+
+/**
+ * The file this render should actually read.
+ *
+ * A proxy is scaled to the same aspect and holds the same timing, so
+ * substituting it changes nothing about the edit — only how much work the
+ * decoder does.
+ */
+function sourcePath(asset: MediaAsset, options: RenderOptions): string {
+  return options.useProxies && asset.proxyPath ? asset.proxyPath : asset.path
 }
 
 function resolveClips(project: Project, timeline: Timeline, startFrame: number, endFrame: number): ResolvedClip[] {
@@ -257,9 +273,9 @@ export function buildRenderCommand(
 
     // --- Input. -ss before -i seeks the demuxer, which is far cheaper than trimming in the graph.
     if (source.type === 'image') {
-      inputArgs.push('-loop', '1', '-framerate', String(fps), '-t', sourceDurationSeconds.toFixed(6), '-i', source.path)
+      inputArgs.push('-loop', '1', '-framerate', String(fps), '-t', sourceDurationSeconds.toFixed(6), '-i', sourcePath(source, options))
     } else {
-      inputArgs.push('-ss', sourceStartSeconds.toFixed(6), '-t', sourceDurationSeconds.toFixed(6), '-i', source.path)
+      inputArgs.push('-ss', sourceStartSeconds.toFixed(6), '-t', sourceDurationSeconds.toFixed(6), '-i', sourcePath(source, options))
     }
     const index = inputIndex++
 
@@ -483,7 +499,15 @@ export function buildFrameCommand(
   const command = buildRenderCommand(
     project,
     timeline,
-    { outputPath, startFrame: frame, endFrame: frame + 1, preset: 'ultrafast', videoOnly: true },
+    {
+      outputPath,
+      startFrame: frame,
+      endFrame: frame + 1,
+      preset: 'ultrafast',
+      videoOnly: true,
+      // The monitor is a preview; the export path never passes this.
+      useProxies: true,
+    },
     sidecarDir,
   )
   // Replace the encoder tail with a single-image sink.

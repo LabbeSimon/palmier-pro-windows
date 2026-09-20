@@ -89,6 +89,7 @@ const api = {
     addTransition: (args: unknown) => invoke<Receipt>('ops:addTransition', args),
     removeTransition: (args: unknown) => invoke<Receipt>('ops:removeTransition', args),
     addSubtitles: (args: unknown) => invoke<Receipt>('ops:addSubtitles', args),
+    setAssetProxies: (args: unknown) => invoke<Receipt>('ops:setAssetProxies', args),
   },
   agent: {
     settings: () =>
@@ -104,6 +105,17 @@ const api = {
     cancel: () => invoke<{ cancelled: boolean }>('agent:cancel'),
     clear: () => invoke<{ cleared: boolean }>('agent:clear'),
     onEvent: (listener: (event: AgentEvent) => void) => subscribe('agent:event', listener),
+  },
+  proxies: {
+    state: () =>
+      invoke<{ total: number; ready: number; building: boolean; width: number }>('proxies:state'),
+    build: () => invoke<{ built: number; message: string }>('proxies:build'),
+    cancel: () => invoke<{ cancelled: boolean }>('proxies:cancel'),
+    clear: () => invoke<{ message: string }>('proxies:clear'),
+    onProgress: (
+      listener: (progress: { assetId: string; name: string; done: number; total: number }) => void,
+    ) => subscribe('proxies:progress', listener),
+    onDone: (listener: () => void) => subscribe('proxies:done', listener),
   },
   subtitles: {
     import: (path?: string) =>

@@ -1482,6 +1482,50 @@ export function addMarkers(
 
 // --- Assets ---------------------------------------------------------------
 
+/**
+ * Records the proxy files that were just built.
+ *
+ * Kept separate from `addAssets` because building a proxy is slow and the
+ * project must stay editable while it runs — the paths land in one operation
+ * when the work is done, which is also one undo step rather than one per file.
+ */
+export function setAssetProxies(
+  project: Project,
+  args: { proxies: { assetId: string; proxyPath: string | null }[] },
+): MutationResult {
+  if (!Array.isArray(args.proxies) || args.proxies.length === 0) {
+    throw new OpError('invalid_argument', 'proxies must be a non-empty array')
+  }
+  const next = clone(project)
+  const updated: string[] = []
+  const warnings: string[] = []
+
+  for (const entry of args.proxies) {
+    const asset = next.assets.find((a) => a.id === entry.assetId)
+    if (!asset) {
+      warnings.push(`asset ${entry.assetId} is no longer in the project`)
+      continue
+    }
+    if ((asset.proxyPath ?? null) === (entry.proxyPath ?? null)) continue
+    asset.proxyPath = entry.proxyPath
+    updated.push(asset.id)
+  }
+
+  return {
+    project: updated.length > 0 ? touch(next) : project,
+    receipt: {
+      operation: 'set_asset_proxies',
+      changed: updated.length > 0,
+      summary:
+        updated.length > 0
+          ? `${updated.length} clip(s) now have a proxy`
+          : 'No proxy path changed',
+      affectedIds: updated,
+      warnings,
+    },
+  }
+}
+
 export function addAssets(project: Project, assets: MediaAsset[]): MutationResult {
   const next = clone(project)
   const added: string[] = []

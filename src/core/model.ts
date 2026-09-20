@@ -240,6 +240,14 @@ export interface MediaAsset {
   channels: number
   /** Cached thumbnail path, populated lazily. */
   thumbnailPath: string | null
+  /**
+   * Low-resolution stand-in used for preview and playback only.
+   *
+   * An export always reads the original: a proxy exists to make editing
+   * bearable on a modest machine, and quietly shipping it would turn a
+   * performance aid into silent quality loss.
+   */
+  proxyPath?: string | null
 }
 
 export interface Project {

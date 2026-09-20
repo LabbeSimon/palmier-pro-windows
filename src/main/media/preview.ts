@@ -143,6 +143,8 @@ export function renderPreview(
         preset: 'veryfast',
         startFrame,
         endFrame,
+        // A preview is a stand-in by definition, so it reads stand-ins.
+        useProxies: true,
       },
       onProgress,
     )

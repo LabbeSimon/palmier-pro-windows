@@ -30,10 +30,11 @@ import { TRANSITION_KINDS } from '../../core/model.js'
 import { OpError, type Receipt } from '../../core/ops.js'
 import { framesToTimecode } from '../../core/timecode.js'
 import { probeAsset, renderFrame, renderTimeline } from '../media/ffmpeg.js'
+import { buildProxies, canProxy, PROXY_WIDTH } from '../media/proxy.js'
 import { formatSrt, formatVtt, parseSubtitles } from '../../core/subtitles.js'
 import { framesToSeconds, secondsToFrames } from '../../core/timecode.js'
 import { readFile, writeFile } from 'node:fs/promises'
-import { ProjectStore } from '../project/store.js'
+import { cacheDirFor, ProjectStore } from '../project/store.js'
 
 export interface ToolContext {
   store: ProjectStore
@@ -206,6 +207,8 @@ export const TOOLS: ToolDefinition[] = [
         height: a.height,
         fps: a.fps,
         hasAudio: a.hasAudio,
+        // Present only when a proxy exists, so a project without any stays terse.
+        ...(a.proxyPath ? { proxied: true } : {}),
       })),
     }),
   },
@@ -846,6 +849,31 @@ export const TOOLS: ToolDefinition[] = [
           }),
         ),
       ),
+  },
+  {
+    name: 'build_proxies',
+    description:
+      'Transcode every video clip to a small all-intra copy, so editing and preview stay responsive on a modest ' +
+      'machine. Proxies are used for preview only — an export always reads the original files, so this never ' +
+      'costs delivered quality. Already-current proxies are skipped.',
+    inputSchema: object({}),
+    handler: async (_args, ctx) => {
+      const project = ctx.store.project
+      const assets = project.assets.filter(canProxy)
+      if (assets.length === 0) {
+        throw new OpError('refused', 'this project has no video clip to proxy')
+      }
+      const updated = await buildProxies(assets, cacheDirFor(project.path)).promise
+      if (updated.length === 0) {
+        return { built: 0, summary: 'every clip already had a current proxy', width: PROXY_WIDTH }
+      }
+      const receipt = ctx.store.apply((p) =>
+        ops.setAssetProxies(p, {
+          proxies: updated.map((asset) => ({ assetId: asset.id, proxyPath: asset.proxyPath ?? null })),
+        }),
+      )
+      return receiptPayload(receipt, { built: updated.length, width: PROXY_WIDTH })
+    },
   },
   {
     name: 'get_subtitles',
