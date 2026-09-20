@@ -256,6 +256,7 @@ const UI_OPS: Record<string, (project: Project, args: any) => ops.MutationResult
   addEffect: ops.addEffect,
   removeEffect: ops.removeEffect,
   setEffectParams: ops.setEffectParams,
+  setEffectCurve: ops.setEffectCurve,
   reorderEffect: ops.reorderEffect,
   addTransition: ops.addTransition,
   removeTransition: ops.removeTransition,

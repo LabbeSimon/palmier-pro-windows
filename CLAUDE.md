@@ -33,11 +33,12 @@ Fait et vérifié :
 - Import vidéo = image + son en clips liés
 - Glisser-déposer depuis l'explorateur
 - Double moniteur clip / projet, mixeur audio en dB
-- Barre de menus native, 38 outils MCP, bouton de connexion en un clic
+- Barre de menus native, 42 outils MCP, bouton de connexion en un clic
 - Logo intégré : `.ico` multi-tailles dans l'exe, `.png` Linux
 - Keyframes : domaine, rendu, éditeur, MCP
 - Agent intégré + journal d'actions annulables une par une
-- 245 tests verts ; exe Windows signé non, mais construit et livré
+- Sous-titres SRT/VTT, étalonnage courbes + roues
+- 290 tests verts ; exe Windows signé non, mais construit et livré
 
 ---
 
@@ -139,7 +140,7 @@ Non vérifié : l'aller-retour réel avec l'API Anthropic. Le décodage du flux,
 la boucle d'outils, les refus et le plafond de tours sont couverts par 16 tests
 avec un transport bouchonné, mais aucune requête n'a été envoyée pour de vrai.
 
-### Bloc 5 — Fonctions Kdenlive manquantes  🟡 (4/8)
+### Bloc 5 — Fonctions Kdenlive manquantes  🟡 (6/8)
 
 - [x] **Groupes de clips** — `Ctrl+G` / `Ctrl+Shift+G`, liseré ambre sur les
       clips groupés ; un groupe fusionne au lieu de s'imbriquer
@@ -149,8 +150,15 @@ avec un transport bouchonné, mais aucune requête n'a été envoyée pour de vr
 - [x] **Trim avancé** : ripple, roll, slip, slide — dans l'inspecteur et en MCP,
       chacun refusé avec le chiffre exact quand la poignée ou le voisin manque
 - [ ] Proxy clips pour le montage sur machine modeste
-- [ ] Étalonnage : courbes, roues chromatiques
-- [ ] Sous-titres : édition, import/export SRT
+- [x] **Étalonnage** : correcteur trois bandes (ombres / médiums / hautes
+      lumières) avec **roues à tirer**, et courbes de tonalité master + R/V/B
+      avec **points déplaçables**. Un canal laissé droit ne coûte aucune passe
+      de filtre. Rendu vérifié au vrai FFmpeg (`colorbalance`, `curves`)
+- [x] **Sous-titres** : import/export `.srt` et `.vtt`, panneau d'édition,
+      incrustation au rendu. Une pièce devient un **clip ordinaire** sur une
+      piste sous-titres, donc déplaçable et rognable comme le reste. Le parseur
+      encaisse BOM, CRLF, points au lieu de virgules, index absents, balises
+      `<i>` — et **nomme** les lignes qu'il n'a pas pu utiliser
 - [ ] Multicam
 
 ### Bloc 6 — Distribution  ⬜
@@ -169,6 +177,11 @@ avec un transport bouchonné, mais aucune requête n'a été envoyée pour de vr
   Quelqu'un qui connaît Kdenlive doit être immédiatement chez lui. En cas
   d'arbitrage entre « joli » et « comme Kdenlive », c'est Kdenlive qui gagne.
 - **Ordre de travail : Bloc 1 (UI) puis Bloc 2 (lecture temps réel).**
+- **20/09/2026 — Bug trouvé en vérifiant les sous-titres : le moniteur
+  rognait le bas de chaque image.** `height: 100%` sur un élément de grille
+  dont la piste est dimensionnée par l'image elle-même : l'image dépassait la
+  boîte et `overflow: hidden` coupait — exactement là où vivent les
+  sous-titres. L'image est désormais en position absolue sur la boîte.
 - **20/09/2026 — Un paramètre non réévalué par FFmpeg n'est pas animable.**
   Plutôt que de stocker une courbe qui ne se verrait pas au rendu, le domaine
   refuse et nomme les paramètres qui, eux, marchent.

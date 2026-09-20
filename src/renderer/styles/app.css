@@ -1822,3 +1822,110 @@ input[type='range']:hover::-webkit-slider-thumb {
   display: flex;
   gap: 2px;
 }
+
+/* --- Grading --------------------------------------------------------------
+   Input left to right, output bottom to top: the identity is the diagonal, so
+   an S-shape reads as contrast without needing a legend.                     */
+
+.curve-editor {
+  margin: var(--space-2) 0;
+}
+
+.curve-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: var(--fs-caption);
+  color: var(--text-muted);
+}
+
+.curve-head .link { margin: 0; }
+
+.curve-canvas {
+  display: block;
+  width: 100%;
+  height: 128px;
+  margin-top: var(--space-1);
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.curve-identity { stroke: var(--border-strong); stroke-width: 1; stroke-dasharray: 3 3; }
+.curve-line { fill: none; stroke: var(--text); stroke-width: 1.5; }
+.curve-point { fill: var(--bg-panel); stroke: var(--text); stroke-width: 1.2; cursor: grab; }
+.curve-point.on { fill: var(--accent); stroke: var(--text); }
+
+/* One channel each, so which curve you are shaping is never in doubt. */
+.curve-editor.r .curve-line { stroke: #e05a5a; }
+.curve-editor.g .curve-line { stroke: #5fbf5f; }
+.curve-editor.b .curve-line { stroke: #5a8ae0; }
+.curve-editor.r .curve-point { stroke: #e05a5a; }
+.curve-editor.g .curve-point { stroke: #5fbf5f; }
+.curve-editor.b .curve-point { stroke: #5a8ae0; }
+
+.curve-hint {
+  margin: 2px 0 0;
+  font-size: var(--fs-caption);
+  color: var(--text-faint);
+}
+
+.color-wheels {
+  display: flex;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+}
+
+.wheel {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.wheel-disc {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  cursor: crosshair;
+  touch-action: none;
+  /* Red at the top, matching where the maths puts the red axis. */
+  background:
+    radial-gradient(circle at 50% 50%, #8c8c8c 0%, rgb(140 140 140 / 0) 72%),
+    conic-gradient(
+      from 0deg,
+      #ff2b2b, #ffd000, #7dff2b, #00ffa8, #00c8ff, #2b5bff, #a52bff, #ff2bc8, #ff2b2b
+    );
+}
+
+.wheel-disc:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.wheel-puck {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  margin: -5px 0 0 -5px;
+  background: #fff;
+  border: 1px solid #111;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.5);
+  pointer-events: none;
+}
+
+.wheel-label {
+  font-size: var(--fs-caption);
+  color: var(--text-muted);
+}
+
+.wheel-value {
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  color: var(--text-faint);
+  white-space: nowrap;
+}

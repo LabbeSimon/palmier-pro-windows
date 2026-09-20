@@ -1,4 +1,6 @@
-import { EFFECTS_BY_ID, type Effect } from '../../core/effects.js'
+import { EFFECTS_BY_ID, type CurvePoint, type Effect } from '../../core/effects.js'
+import { ColorWheels } from './ColorWheels.js'
+import { CurveEditor } from './CurveEditor.js'
 import { isAnimated, type KeyframeMap } from '../../core/keyframes.js'
 import { TRANSITION_LABELS } from '../../core/transitions.js'
 import { TRANSITION_KINDS, type Clip, type Timeline } from '../../core/model.js'
@@ -8,6 +10,7 @@ interface Props {
   clip: Clip
   timeline: Timeline
   onSetParams: (effectId: string, params: Record<string, number>) => void
+  onSetCurve: (effectId: string, channel: string, points: CurvePoint[]) => void
   onToggle: (effectId: string, enabled: boolean) => void
   onRemove: (effectId: string) => void
   onReorder: (effectId: string, toIndex: number) => void
@@ -86,6 +89,7 @@ export function EffectStack(props: Props) {
               index={index}
               count={effects.length}
               onSetParams={props.onSetParams}
+              onSetCurve={props.onSetCurve}
               onToggle={props.onToggle}
               onRemove={props.onRemove}
               onReorder={props.onReorder}
@@ -103,6 +107,7 @@ function EffectRow(props: {
   index: number
   count: number
   onSetParams: (effectId: string, params: Record<string, number>) => void
+  onSetCurve: (effectId: string, channel: string, points: CurvePoint[]) => void
   onToggle: (effectId: string, enabled: boolean) => void
   onRemove: (effectId: string) => void
   onReorder: (effectId: string, toIndex: number) => void
@@ -156,8 +161,28 @@ function EffectRow(props: {
         </button>
       </div>
 
-      {definition.params.length === 0 ? (
-        <p className="hint">No settings.</p>
+      {/* Colour wheels are nine numbers that only make sense as three pucks. */}
+      {definition.id === 'color-wheels' ? (
+        <ColorWheels
+          params={effect.params}
+          onChange={(params) => props.onSetParams(effect.id, params)}
+        />
+      ) : null}
+
+      {(definition.curveChannels ?? []).map((channel) => (
+        <CurveEditor
+          key={channel.key}
+          channel={channel.key}
+          label={channel.label}
+          points={effect.curves?.[channel.key]}
+          onChange={(points) => props.onSetCurve(effect.id, channel.key, points)}
+        />
+      ))}
+
+      {definition.params.length === 0 || definition.id === 'color-wheels' ? (
+        definition.curveChannels?.length || definition.id === 'color-wheels' ? null : (
+          <p className="hint">No settings.</p>
+        )
       ) : (
         definition.params.map((param) => {
           // A curve overrides the slider at render time; saying so beats letting

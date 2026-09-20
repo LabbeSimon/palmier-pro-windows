@@ -5,6 +5,7 @@ import type { ClipProperties } from '../../core/ops.js'
 import { framesToTimecode } from '../../core/timecode.js'
 import { EffectStack } from './EffectStack.js'
 import { isAnimated } from '../../core/keyframes.js'
+import type { CurvePoint } from '../../core/effects.js'
 
 interface Props {
   timeline: Timeline
@@ -14,6 +15,7 @@ interface Props {
   onUpdateText: (clipId: string, content: string) => void
   onSetTimelineSettings: (settings: { fps?: number; width?: number; height?: number; name?: string }) => void
   onSetEffectParams: (clipId: string, effectId: string, params: Record<string, number>) => void
+  onSetEffectCurve: (clipId: string, effectId: string, channel: string, points: CurvePoint[]) => void
   onToggleEffect: (clipId: string, effectId: string, enabled: boolean) => void
   onRemoveEffect: (clipId: string, effectId: string) => void
   onReorderEffect: (clipId: string, effectId: string, toIndex: number) => void
@@ -272,6 +274,9 @@ export function Inspector(props: Props) {
                 clip={clip}
                 timeline={timeline}
                 onSetParams={(effectId, params) => props.onSetEffectParams(clip.id, effectId, params)}
+                onSetCurve={(effectId, channel, points) =>
+                  props.onSetEffectCurve(clip.id, effectId, channel, points)
+                }
                 onToggle={(effectId, enabled) => props.onToggleEffect(clip.id, effectId, enabled)}
                 onRemove={(effectId) => props.onRemoveEffect(clip.id, effectId)}
                 onReorder={(effectId, toIndex) => props.onReorderEffect(clip.id, effectId, toIndex)}

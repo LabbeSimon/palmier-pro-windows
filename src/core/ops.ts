@@ -48,6 +48,9 @@ import {
 import {
   defaultParams,
   EFFECTS_BY_ID,
+  isIdentityCurve,
+  normalizeCurve,
+  type CurvePoint,
   type Effect,
   type EffectDefinition,
   type EffectParamSpec,
@@ -1680,6 +1683,74 @@ export function removeEffect(
       operation: 'remove_effect',
       changed: true,
       summary: `Removed "${definition?.name ?? effect.definitionId}" from clip ${args.clipId}`,
+      affectedIds: [args.effectId],
+      warnings: [],
+    },
+  }
+}
+
+/**
+ * Replaces one channel of a curve effect.
+ *
+ * Points are normalised here rather than trusted: the editor sends whatever the
+ * pointer produced, and an unsorted or out-of-range list would compile to a
+ * filter FFmpeg rejects at render time — far from where the mistake was made.
+ */
+export function setEffectCurve(
+  project: Project,
+  args: {
+    timelineId?: string
+    clipId: string
+    effectId: string
+    channel: string
+    points: CurvePoint[]
+  },
+): MutationResult {
+  const target = requireTimeline(project, args.timelineId)
+  requireClip(target, args.clipId)
+
+  const next = clone(project)
+  const timeline = next.timelines.find((t) => t.id === target.id)!
+  const loc = requireClip(timeline, args.clipId)
+  refuseIfLocked(loc.track, 'changing effects on its clips')
+  const { effect } = requireEffect(loc.clip, args.effectId)
+  const definition = EFFECTS_BY_ID.get(effect.definitionId)
+  if (!definition) throw new OpError('not_found', `unknown effect "${effect.definitionId}"`)
+
+  const channels = definition.curveChannels ?? []
+  if (channels.length === 0) {
+    throw new OpError('refused', `"${definition.name}" has no curves`)
+  }
+  const channel = channels.find((c) => c.key === args.channel)
+  if (!channel) {
+    throw new OpError(
+      'invalid_argument',
+      `"${definition.name}" has no curve channel "${args.channel}" (has ${channels.map((c) => c.key).join(', ')})`,
+    )
+  }
+  if (!Array.isArray(args.points)) {
+    throw new OpError('invalid_argument', 'points must be an array of {x, y}')
+  }
+
+  const points = normalizeCurve(args.points as CurvePoint[])
+  if (points.length < 2) {
+    throw new OpError('invalid_argument', 'a curve needs at least two points inside 0..1')
+  }
+
+  const before = JSON.stringify(effect.curves ?? {})
+  effect.curves ??= {}
+  if (isIdentityCurve(points)) delete effect.curves[channel.key]
+  else effect.curves[channel.key] = points
+  const changed = JSON.stringify(effect.curves) !== before
+
+  return {
+    project: changed ? touch(next) : project,
+    receipt: {
+      operation: 'set_effect_curve',
+      changed,
+      summary: changed
+        ? `${channel.label} curve set to ${points.length} point(s) on clip ${args.clipId}`
+        : `${channel.label} curve already matched the request`,
       affectedIds: [args.effectId],
       warnings: [],
     },

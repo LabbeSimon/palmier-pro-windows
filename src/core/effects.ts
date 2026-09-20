@@ -42,6 +42,47 @@ export interface EffectParamSpec {
  */
 export type ParamResolver = (key: string, value: number, digits?: number) => string
 
+/** A control point of a tone curve, both axes normalised to 0..1. */
+export interface CurvePoint {
+  x: number
+  y: number
+}
+
+/** The identity curve: input passes straight through. */
+export const IDENTITY_CURVE: CurvePoint[] = [
+  { x: 0, y: 0 },
+  { x: 1, y: 1 },
+]
+
+export interface CurveChannelSpec {
+  key: string
+  label: string
+}
+
+/** Points sorted by input, clamped to the unit square, duplicates collapsed. */
+export function normalizeCurve(points: CurvePoint[]): CurvePoint[] {
+  const clamp = (value: number) => Math.min(Math.max(value, 0), 1)
+  const byX = new Map<number, number>()
+  for (const point of points) {
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) continue
+    byX.set(Number(clamp(point.x).toFixed(4)), clamp(point.y))
+  }
+  return [...byX.entries()].sort((a, b) => a[0] - b[0]).map(([x, y]) => ({ x, y }))
+}
+
+export function isIdentityCurve(points: CurvePoint[] | undefined): boolean {
+  if (!points || points.length === 0) return true
+  const normalized = normalizeCurve(points)
+  return normalized.every((point) => Math.abs(point.x - point.y) < 1e-4)
+}
+
+/** FFmpeg's `curves` point syntax: `0/0 0.5/0.6 1/1`. */
+export function curveExpression(points: CurvePoint[]): string {
+  const normalized = normalizeCurve(points)
+  const withEnds = normalized.length >= 2 ? normalized : IDENTITY_CURVE
+  return withEnds.map((point) => `${point.x.toFixed(4)}/${point.y.toFixed(4)}`).join(' ')
+}
+
 export interface EffectDefinition {
   id: string
   name: string
@@ -56,7 +97,13 @@ export interface EffectDefinition {
    * `resolve` is supplied when the clip has keyframes; a definition that ignores
    * it simply renders a constant.
    */
-  filter: (params: Record<string, number>, resolve?: ParamResolver) => string | null
+  filter: (
+    params: Record<string, number>,
+    resolve?: ParamResolver,
+    curves?: Record<string, CurvePoint[]>,
+  ) => string | null
+  /** Channels this effect exposes as draggable curves, if any. */
+  curveChannels?: CurveChannelSpec[]
 }
 
 /** Default resolver: no animation, just the formatted number. */
@@ -68,6 +115,8 @@ export interface Effect {
   definitionId: string
   enabled: boolean
   params: Record<string, number>
+  /** Tone curves by channel, for effects that expose them. */
+  curves?: Record<string, CurvePoint[]>
 }
 
 const near = (value: number, target: number, epsilon = 1e-6) => Math.abs(value - target) < epsilon
@@ -217,6 +266,61 @@ export const EFFECT_DEFINITIONS: EffectDefinition[] = [
     },
   },
 
+  {
+    id: 'color-wheels',
+    name: 'Colour wheels',
+    category: 'Color',
+    kind: 'video',
+    description:
+      'Three-way colour corrector: shift shadows, midtones and highlights independently. ' +
+      'This is the grading control, where brightness and saturation are corrections.',
+    params: [
+      { key: 'shadowsR', label: 'Shadows R', min: -1, max: 1, step: 0.01, default: 0 },
+      { key: 'shadowsG', label: 'Shadows G', min: -1, max: 1, step: 0.01, default: 0 },
+      { key: 'shadowsB', label: 'Shadows B', min: -1, max: 1, step: 0.01, default: 0 },
+      { key: 'midsR', label: 'Midtones R', min: -1, max: 1, step: 0.01, default: 0 },
+      { key: 'midsG', label: 'Midtones G', min: -1, max: 1, step: 0.01, default: 0 },
+      { key: 'midsB', label: 'Midtones B', min: -1, max: 1, step: 0.01, default: 0 },
+      { key: 'highsR', label: 'Highlights R', min: -1, max: 1, step: 0.01, default: 0 },
+      { key: 'highsG', label: 'Highlights G', min: -1, max: 1, step: 0.01, default: 0 },
+      { key: 'highsB', label: 'Highlights B', min: -1, max: 1, step: 0.01, default: 0 },
+    ],
+    filter: (p) => {
+      const parts = [
+        `rs=${fixed(p.shadowsR ?? 0)}`, `gs=${fixed(p.shadowsG ?? 0)}`, `bs=${fixed(p.shadowsB ?? 0)}`,
+        `rm=${fixed(p.midsR ?? 0)}`, `gm=${fixed(p.midsG ?? 0)}`, `bm=${fixed(p.midsB ?? 0)}`,
+        `rh=${fixed(p.highsR ?? 0)}`, `gh=${fixed(p.highsG ?? 0)}`, `bh=${fixed(p.highsB ?? 0)}`,
+      ]
+      return `colorbalance=${parts.join(':')}`
+    },
+  },
+  {
+    id: 'curves',
+    name: 'Curves',
+    category: 'Color',
+    kind: 'video',
+    description:
+      'Tone curves, master plus one per channel. Drag a point to bend the response: the classic ' +
+      'S-curve for contrast, a lifted black point for a film look.',
+    params: [],
+    curveChannels: [
+      { key: 'master', label: 'Master' },
+      { key: 'r', label: 'Red' },
+      { key: 'g', label: 'Green' },
+      { key: 'b', label: 'Blue' },
+    ],
+    filter: (_params, _resolve, curves) => {
+      // An identity channel is omitted rather than written out, so a curve on
+      // red alone does not drag the other three through the filter.
+      const parts: string[] = []
+      for (const [option, key] of [['master', 'master'], ['r', 'r'], ['g', 'g'], ['b', 'b']] as const) {
+        const points = curves?.[key]
+        if (isIdentityCurve(points)) continue
+        parts.push(`${option}='${curveExpression(points!)}'`)
+      }
+      return parts.length > 0 ? `curves=${parts.join(':')}` : null
+    },
+  },
   // --- Stylize ------------------------------------------------------------
   {
     id: 'vignette',
@@ -343,11 +447,14 @@ export function effectChain(
     const animated = definition.params.some(
       (spec) => spec.animatable && expressionFor?.(effect.id, spec.key),
     )
-    if (!animated && isNeutral(definition, effect.params)) continue
+    const curved = (definition.curveChannels ?? []).some(
+      (channel) => !isIdentityCurve(effect.curves?.[channel.key]),
+    )
+    if (!animated && !curved && isNeutral(definition, effect.params)) continue
 
     const resolve: ParamResolver = (key, value, digits = 4) =>
       expressionFor?.(effect.id, key) ?? value.toFixed(digits)
-    const fragment = definition.filter(effect.params, resolve)
+    const fragment = definition.filter(effect.params, resolve, effect.curves)
     if (fragment) out.push(fragment)
   }
   return out
@@ -362,6 +469,11 @@ function isNeutral(definition: EffectDefinition, params: Record<string, number>)
     gamma: { amount: 1 },
     hue: { degrees: 0 },
     'audio-gain': { db: 0 },
+    'color-wheels': {
+      shadowsR: 0, shadowsG: 0, shadowsB: 0,
+      midsR: 0, midsG: 0, midsB: 0,
+      highsR: 0, highsG: 0, highsB: 0,
+    },
   }
   const neutral = NEUTRAL[definition.id]
   if (!neutral) return false

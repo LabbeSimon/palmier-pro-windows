@@ -1154,6 +1154,11 @@ const EFFECT_TOOLS: ToolDefinition[] = [
             kind: definition?.kind ?? 'video',
             enabled: e.enabled,
             params: e.params,
+            // Omitted when identity, so a stack with no grading stays readable.
+            ...(e.curves && Object.keys(e.curves).length > 0 ? { curves: e.curves } : {}),
+            ...(definition?.curveChannels
+              ? { curveChannels: definition.curveChannels.map((c) => c.key) }
+              : {}),
           }
         }),
         transitionIn: found.clip.transitionIn
@@ -1190,6 +1195,42 @@ const EFFECT_TOOLS: ToolDefinition[] = [
             effectId: args.effect_id,
             params: args.params,
             enabled: args.enabled,
+          }),
+        ),
+      ),
+  },
+  {
+    name: 'set_effect_curve',
+    description:
+      'Set one channel of a curve effect. Points are {x, y} in 0..1, input against output; the identity is a ' +
+      'straight diagonal. An S-shape adds contrast, a lifted first point raises the black level. Points are ' +
+      'sorted and clamped, so they need not arrive in order.',
+    inputSchema: object(
+      {
+        timeline_id: str('Defaults to the active timeline.'),
+        clip_id: str('Clip holding the effect.'),
+        effect_id: str('Effect instance id from get_clip_effects.'),
+        channel: {
+          type: 'string',
+          enum: ['master', 'r', 'g', 'b'],
+          description: 'Which channel to shape.',
+        },
+        points: arr(
+          object({ x: num('Input level, 0..1.'), y: num('Output level, 0..1.') }, ['x', 'y']),
+          'At least two points.',
+        ),
+      },
+      ['clip_id', 'effect_id', 'channel', 'points'],
+    ),
+    handler: (args, ctx) =>
+      receiptPayload(
+        ctx.store.apply((p) =>
+          ops.setEffectCurve(p, {
+            timelineId: args.timeline_id,
+            clipId: args.clip_id,
+            effectId: args.effect_id,
+            channel: args.channel,
+            points: args.points,
           }),
         ),
       ),

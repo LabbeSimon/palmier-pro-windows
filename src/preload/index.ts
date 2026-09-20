@@ -84,6 +84,7 @@ const api = {
     addEffect: (args: unknown) => invoke<Receipt>('ops:addEffect', args),
     removeEffect: (args: unknown) => invoke<Receipt>('ops:removeEffect', args),
     setEffectParams: (args: unknown) => invoke<Receipt>('ops:setEffectParams', args),
+    setEffectCurve: (args: unknown) => invoke<Receipt>('ops:setEffectCurve', args),
     reorderEffect: (args: unknown) => invoke<Receipt>('ops:reorderEffect', args),
     addTransition: (args: unknown) => invoke<Receipt>('ops:addTransition', args),
     removeTransition: (args: unknown) => invoke<Receipt>('ops:removeTransition', args),

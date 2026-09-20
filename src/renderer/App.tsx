@@ -473,6 +473,11 @@ export function App() {
               onSetEffectParams={(clipId, effectId, params) =>
                 void run(() => window.palmier.ops.setEffectParams({ timelineId, clipId, effectId, params }))
               }
+              onSetEffectCurve={(clipId, effectId, channel, points) =>
+                void run(() =>
+                  window.palmier.ops.setEffectCurve({ timelineId, clipId, effectId, channel, points }),
+                )
+              }
               onToggleEffect={(clipId, effectId, enabled) =>
                 void run(() => window.palmier.ops.setEffectParams({ timelineId, clipId, effectId, enabled }))
               }

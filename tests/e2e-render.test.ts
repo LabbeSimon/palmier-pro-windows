@@ -176,3 +176,68 @@ describe('subtitle rendering', () => {
     expect((await stat(output)).size).toBeGreaterThan(0)
   }, 240_000)
 })
+
+describe('grading rendering', () => {
+  /** A still source, so any difference between frames is the grade itself. */
+  async function gradedProject(
+    definitionId: string,
+    apply: (project: Project, clipId: string, effectId: string) => Project,
+  ): Promise<{ plain: Project; graded: Project }> {
+    const stillPath = join(workDir, `grade-${definitionId}.png`)
+    await exec(FFMPEG_PATH, [
+      '-hide_banner', '-y', '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=1', '-frames:v', '1', stillPath,
+    ])
+    const still: MediaAsset = {
+      id: crypto.randomUUID(), path: stillPath, name: 'grade.png', type: 'image',
+      durationSeconds: 0, width: 320, height: 180, fps: 0,
+      hasAudio: false, sampleRate: 0, channels: 0, thumbnailPath: null,
+    }
+    let state = ops.addAssets(ops.emptyProject('Grade'), [still]).project
+    state = ops.addClips(state, { clips: [{ assetId: still.id, durationFrames: 30 }] }).project
+    const clipId = state.timelines[0]!.tracks[0]!.clips[0]!.id
+    const plain = state
+    state = ops.addEffect(state, { clipIds: [clipId], definitionId }).project
+    const effectId = state.timelines[0]!.tracks[0]!.clips[0]!.effects[0]!.id
+    return { plain, graded: apply(state, clipId, effectId) }
+  }
+
+  async function signature(project: Project, name: string): Promise<string> {
+    const output = join(workDir, `${name}.png`)
+    const timeline = project.timelines.find((t) => t.id === project.activeTimelineId)!
+    await renderFrame(project, timeline, 5, output)
+    const { stdout } = await exec(FFMPEG_PATH, [
+      '-hide_banner', '-v', 'error', '-i', output,
+      '-vf', 'scale=8:8,format=rgb24', '-f', 'rawvideo', '-',
+    ])
+    return stdout
+  }
+
+  it('a bent master curve changes the picture', async () => {
+    const { plain, graded } = await gradedProject('curves', (project, clipId, effectId) =>
+      ops.setEffectCurve(project, {
+        clipId, effectId, channel: 'master',
+        points: [{ x: 0, y: 0.25 }, { x: 0.5, y: 0.5 }, { x: 1, y: 1 }],
+      }).project,
+    )
+    expect(await signature(graded, 'curve-graded')).not.toBe(await signature(plain, 'curve-plain'))
+  }, 240_000)
+
+  it('a red-only curve leaves the picture different from a master curve', async () => {
+    const { plain, graded } = await gradedProject('curves', (project, clipId, effectId) =>
+      ops.setEffectCurve(project, {
+        clipId, effectId, channel: 'r',
+        points: [{ x: 0, y: 0.4 }, { x: 1, y: 1 }],
+      }).project,
+    )
+    expect(await signature(graded, 'curve-red')).not.toBe(await signature(plain, 'curve-plain2'))
+  }, 240_000)
+
+  it('a colour wheel shift changes the picture', async () => {
+    const { plain, graded } = await gradedProject('color-wheels', (project, clipId, effectId) =>
+      ops.setEffectParams(project, {
+        clipId, effectId, params: { shadowsB: 0.4, highsR: 0.25 },
+      }).project,
+    )
+    expect(await signature(graded, 'wheels-graded')).not.toBe(await signature(plain, 'wheels-plain'))
+  }, 240_000)
+})
