@@ -32,6 +32,7 @@ import { framesToTimecode } from '../../core/timecode.js'
 import { probeAsset, renderFrame, renderTimeline } from '../media/ffmpeg.js'
 import { buildProxies, canProxy, PROXY_WIDTH } from '../media/proxy.js'
 import { CONFIDENT, syncByAudio, SyncError } from '../media/sync.js'
+import { detectSpeech, SpeechError } from '../media/speech.js'
 import { formatSrt, formatVtt, parseSubtitles } from '../../core/subtitles.js'
 import { framesToSeconds, secondsToFrames } from '../../core/timecode.js'
 import { readFile, writeFile } from 'node:fs/promises'
@@ -1035,6 +1036,122 @@ export const TOOLS: ToolDefinition[] = [
           end: framesToTimecode(clipEndFrame(clip), timeline.fps),
           text: clip.textContent ?? '',
         })),
+      }
+    },
+  },
+  {
+    name: 'add_subtitles',
+    description:
+      'Write subtitle cues straight onto a subtitle track, creating one if needed. This is how you caption ' +
+      'something without a file: you supply the text and the timings. Cues become ordinary clips, so they can be ' +
+      'moved and trimmed afterwards. A cue that lands on top of an earlier one is pushed to start where that one ' +
+      'ends, and the move is reported. There is no speech recognition in this build — the words have to come from ' +
+      'somewhere, and detect_speech gives you the timings to hang them on.',
+    inputSchema: object(
+      {
+        timeline_id: str('Defaults to the active timeline.'),
+        track_id: str('Subtitle track to write to. Defaults to the first one, created if absent.'),
+        subtitles: arr(
+          object(
+            {
+              start_frame: int('Timeline frame the cue appears on.'),
+              duration_frames: int('How long it stays on screen.'),
+              text: str('The line. Newlines are kept as line breaks.'),
+            },
+            ['start_frame', 'duration_frames', 'text'],
+          ),
+          'Cues to add, in any order.',
+        ),
+      },
+      ['subtitles'],
+    ),
+    handler: (args, ctx) =>
+      receiptPayload(
+        ctx.store.apply((p) =>
+          ops.addSubtitles(p, {
+            timelineId: args.timeline_id,
+            trackId: args.track_id,
+            subtitles: (args.subtitles as Record<string, any>[]).map((cue) => ({
+              startFrame: cue.start_frame,
+              durationFrames: cue.duration_frames,
+              text: cue.text,
+            })),
+          }),
+        ),
+      ),
+  },
+  {
+    name: 'detect_speech',
+    description:
+      'Find the stretches of a clip that carry sound, so text can be placed on the moment it is spoken rather ' +
+      'than spread evenly over the clip. Returns segments in both seconds and timeline frames, ready to pass to ' +
+      'add_subtitles. This is voice activity, not recognition: it hears that someone is talking, never what they ' +
+      'said, and music counts as sound. Pair it with text you already have.',
+    inputSchema: object(
+      {
+        timeline_id: str('Defaults to the active timeline; sets the frame rate of the answer.'),
+        clip_id: str('Clip to listen to. Its position sets the timeline frames returned.'),
+        asset_id: str('Media asset to listen to instead, reported from its own start.'),
+        threshold_db: num('Level below which a passage is silence. Default -30.'),
+        min_silence_seconds: num('Shortest gap that splits two segments. Default 0.35.'),
+      },
+    ),
+    handler: async (args, ctx) => {
+      const project = ctx.store.project
+      const timeline = resolveTimeline(project, args.timeline_id)
+
+      let asset: MediaAsset | undefined
+      let offsetFrames = 0
+      let limitFrames = Infinity
+      if (args.clip_id) {
+        const found = ops.findClip(timeline, args.clip_id)
+        if (!found) throw new OpError('not_found', `clip ${args.clip_id} is not on timeline ${timeline.id}`)
+        asset = project.assets.find((a) => a.id === found.clip.mediaRef)
+        if (!asset) throw new OpError('refused', `clip ${args.clip_id} has no media to listen to`)
+        // Segments come back in source time; the clip's trim and position move
+        // them onto the timeline.
+        offsetFrames = found.clip.startFrame - found.clip.trimStartFrame
+        limitFrames = clipEndFrame(found.clip)
+      } else if (args.asset_id) {
+        asset = project.assets.find((a) => a.id === args.asset_id)
+        if (!asset) throw new OpError('not_found', `media asset ${args.asset_id} is not in this project`)
+      } else {
+        throw new OpError('invalid_argument', 'give either clip_id or asset_id')
+      }
+
+      let segments
+      try {
+        segments = await detectSpeech(asset, {
+          thresholdDb: args.threshold_db,
+          minSilenceSeconds: args.min_silence_seconds,
+        })
+      } catch (error) {
+        if (error instanceof SpeechError) throw new OpError('refused', error.message)
+        throw error
+      }
+
+      const placed = segments
+        .map((segment) => {
+          const startFrame = offsetFrames + secondsToFrames(segment.startSeconds, timeline.fps)
+          const endFrame = offsetFrames + secondsToFrames(segment.endSeconds, timeline.fps)
+          return {
+            startSeconds: Number(segment.startSeconds.toFixed(3)),
+            endSeconds: Number(segment.endSeconds.toFixed(3)),
+            startFrame,
+            endFrame: Math.min(endFrame, limitFrames),
+            durationFrames: Math.max(1, Math.min(endFrame, limitFrames) - startFrame),
+            timecode: framesToTimecode(startFrame, timeline.fps),
+          }
+        })
+        .filter((segment) => segment.startFrame < limitFrames && segment.durationFrames > 0)
+
+      return {
+        source: asset.name,
+        fps: timeline.fps,
+        note:
+          'Voice activity only — no words are recognised. Use these timings with text you already have, ' +
+          'via add_subtitles.',
+        segments: placed,
       }
     },
   },

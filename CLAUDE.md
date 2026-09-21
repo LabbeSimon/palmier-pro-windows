@@ -33,13 +33,13 @@ Fait et vérifié :
 - Import vidéo = image + son en clips liés
 - Glisser-déposer depuis l'explorateur
 - Double moniteur clip / projet, mixeur audio en dB
-- Barre de menus native, 46 outils MCP, bouton de connexion en un clic
+- Barre de menus native, 48 outils MCP, bouton de connexion en un clic
 - Logo intégré : `.ico` multi-tailles dans l'exe, `.png` Linux
 - Keyframes : domaine, rendu, éditeur, MCP
 - Agent intégré + journal d'actions annulables une par une
 - Sous-titres SRT/VTT, étalonnage courbes + roues, proxys, multicam
 - CI + release automatique sur tag, mise à jour dans l'app
-- 329 tests verts ; exe Windows signé non, mais construit et livré
+- 343 tests verts ; exe Windows signé non, mais construit et livré
 
 ---
 
@@ -212,6 +212,24 @@ avec un transport bouchonné, mais aucune requête n'a été envoyée pour de vr
 ---
 
 ## Décisions prises
+
+- **21/09/2026 — L'agent peut enfin écrire des sous-titres.** Il manquait
+  `add_subtitles` en MCP : il savait lire et importer, jamais écrire une seule
+  pièce. Ajouté, avec `detect_speech` qui rend les **plages sonores** d'un clip
+  (`silencedetect`) en secondes **et** en frames de la timeline — de quoi caler
+  un texte qu'on a déjà sans rien entendre.
+  **Il n'y a aucune reconnaissance vocale** dans cette build, et rien sur la
+  machine pour en faire : les mots doivent venir de l'utilisateur, d'un script
+  ou d'un `.srt`. L'outil le dit lui-même dans sa réponse.
+- **21/09/2026 — L'app n'utilisait pas le FFmpeg qu'elle embarque.**
+  `resolveBinary` remontait de `../../..` : juste depuis `src/main/media/`,
+  un cran trop haut depuis `out/main/`. Le bundle retombait donc sur le FFmpeg
+  du **PATH**. Symptôme visible : FFmpeg 8.0 dessine un **glyphe** pour le saut
+  de ligne, donc tout sous-titre sur deux lignes gagnait un carré parasite ;
+  la build embarquée, elle, n'en met pas. La recherche remonte désormais
+  jusqu'à trouver, et `tests/build-output.test.ts` refuse un repli sur le PATH.
+  À retenir : **toute vérification à l'écran faite en dev sous Linux jusqu'ici
+  passait par le FFmpeg système**, pas celui qui est livré.
 
 - **21/09/2026 — Ouvrir un dossier sans projet le crée**, à la Obsidian, et
   importe les médias déjà présents. Refuser un dossier parce qu'il manque un

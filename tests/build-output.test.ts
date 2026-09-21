@@ -14,7 +14,7 @@ import { execFile } from 'node:child_process'
 import { copyFile, readFile, rm, stat } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 const exec = promisify(execFile)
 const BUNDLE = join(process.cwd(), 'out', 'main', 'index.js')
@@ -55,5 +55,43 @@ describe('built main bundle', () => {
     if (code === null) return
     // The exact string the shim cut in half the first time.
     expect(code).toMatch(/message: `Created "\$\{created\.project\.name\}"/)
+  })
+})
+
+describe('bundled FFmpeg', () => {
+  /**
+   * The lookup walks up from the module, so it has to work from `src/` during
+   * development and from `out/` in the built bundle. When it missed, the app
+   * fell back to whatever was on PATH: a different renderer than the tested
+   * one, and on this machine one that draws a glyph for a newline.
+   */
+  it('resolves the binaries the app ships, not the ones on PATH', async () => {
+    const { FFMPEG_PATH, FFPROBE_PATH } = await import('../src/main/media/ffmpeg.js')
+    const resolved: [string, string][] = [
+      ['ffmpeg', FFMPEG_PATH],
+      ['ffprobe', FFPROBE_PATH],
+    ]
+    for (const [name, path] of resolved) {
+      // A bare name means the lookup gave up and left it to the shell.
+      expect(path, `${name} fell back to PATH`).not.toBe(name)
+      expect(path).toContain(join('resources', 'ffmpeg'))
+      await stat(path)
+    }
+  })
+
+  it('finds them from the built bundle directory too', async () => {
+    const platformDir = join('resources', 'ffmpeg', `${process.platform}-${process.arch}`, 'ffmpeg')
+    let directory = join(process.cwd(), 'out', 'main')
+    let found: string | null = null
+    for (let up = 0; up < 5 && !found; up++) {
+      const candidate = join(directory, platformDir)
+      try {
+        await stat(candidate)
+        found = candidate
+      } catch {
+        directory = dirname(directory)
+      }
+    }
+    expect(found).not.toBeNull()
   })
 })

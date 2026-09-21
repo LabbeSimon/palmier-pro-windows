@@ -32,8 +32,22 @@ function resolveBinary(name: 'ffmpeg' | 'ffprobe'): string {
   const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
   if (resourcesPath) candidates.push(join(resourcesPath, 'ffmpeg', executable))
 
-  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
-  candidates.push(join(repoRoot, 'resources', 'ffmpeg', `${process.platform}-${process.arch}`, executable))
+  /*
+   * Walk up looking for the bundled binaries rather than counting directories.
+   *
+   * A fixed `../../..` is right for this file's place in `src/` and wrong for
+   * the bundle's place in `out/`, where it landed one level above the repo and
+   * silently fell through to whatever FFmpeg was on PATH. That is the worst
+   * kind of fallback: it works on a developer's machine and ships a different
+   * renderer than the one that was tested — the system build here draws a glyph
+   * for a newline, so every multi-line subtitle gained a stray box.
+   */
+  const platformDir = join('resources', 'ffmpeg', `${process.platform}-${process.arch}`, executable)
+  let directory = dirname(fileURLToPath(import.meta.url))
+  for (let up = 0; up < 5; up++) {
+    candidates.push(join(directory, platformDir))
+    directory = dirname(directory)
+  }
 
   return candidates.find((candidate) => existsSync(candidate)) ?? name
 }
@@ -52,8 +66,24 @@ export class FFmpegError extends Error {
   }
 }
 
+/**
+ * Set PALMIER_LOG_FFMPEG=1 to print every command this spawns.
+ *
+ * A filter graph is built from a dozen places; when the picture is wrong, the
+ * only question that matters is what FFmpeg was actually told, and guessing at
+ * it from the source costs far more than printing it.
+ */
+const LOG_COMMANDS = process.env.PALMIER_LOG_FFMPEG === '1'
+
+function logCommand(binary: string, args: string[]): void {
+  if (!LOG_COMMANDS) return
+  const quoted = args.map((arg) => (/[\s;'"]/.test(arg) ? JSON.stringify(arg) : arg))
+  process.stderr.write(`[ffmpeg] ${binary} ${quoted.join(' ')}\n`)
+}
+
 function run(binary: string, args: string[], signal?: AbortSignal): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
+    logCommand(binary, args)
     const child = spawn(binary, args, { windowsHide: true })
     let stdout = ''
     let stderr = ''

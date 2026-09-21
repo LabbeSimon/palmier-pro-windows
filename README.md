@@ -36,6 +36,10 @@ licence: TypeScript, Electron and FFmpeg, written from scratch.
 - **Grading** — a three-way colour corrector with draggable wheels for shadows, midtones and
   highlights, and tone curves for master, red, green and blue. A channel left straight costs no
   filter pass.
+- **Captioning from the agent** — `detect_speech` reports the stretches of a clip that carry
+  sound, and `add_subtitles` writes cues straight onto a subtitle track. An agent that has the
+  words can therefore time them without hearing anything. There is no speech recognition in
+  this build: the words have to come from you, a script, or an imported file.
 - **Subtitles** — import and export .srt and .vtt, edit the text in a panel, and retime cues on
   the timeline with the same trim and move as any other clip. They are burnt into the render.
 - **Proxy clips** — one button transcodes every oversized video to a 640-wide all-intra copy
@@ -49,9 +53,9 @@ licence: TypeScript, Electron and FFmpeg, written from scratch.
   shows the composited edit.
 - **Native menu** with real accelerators; every item routes to the same handler the UI
   buttons use, so there is no second implementation to drift.
-- **MCP server** on `http://127.0.0.1:19789/mcp`, 46 tools, bound to loopback only.
+- **MCP server** on `http://127.0.0.1:19789/mcp`, 48 tools, bound to loopback only.
 - **Export** — H.264 / AAC MP4 with live progress and cancellation.
-- **Built-in agent** — a conversation panel that edits through the same 46 tools the MCP
+- **Built-in agent** — a conversation panel that edits through the same 48 tools the MCP
   server exposes, so its work lands on the same undo stack as yours. Needs your own Anthropic
   API key, which is encrypted with the OS keystore.
 - **Action journal** — every edit with its source (you, the built-in agent, or an MCP client),
@@ -77,6 +81,7 @@ src/main/      Electron main process.
   media/ffmpeg.ts   Process management: probe, thumbnails, render, progress, cancellation.
   media/proxy.ts    Editing stand-ins: all-intra transcode, cache keyed by size and mtime.
   media/sync.ts     Multicam sync: loudness-envelope correlation, with a confidence.
+  media/speech.ts   Voice activity: where a take carries sound, for timing captions.
   mcp/server.ts     JSON-RPC 2.0 over Streamable HTTP.
   mcp/tools.ts      The tool surface.
   agent/            The built-in agent: Anthropic client, tool loop, key storage.
@@ -100,10 +105,11 @@ Two rules hold the design together:
 `set_clip_properties` · `add_texts` · `update_text` · `list_animatable` · `set_keyframe` ·
 `move_keyframe` · `remove_keyframe` · `trim_clip` · `group_clips` · `ungroup_clips` ·
 `set_work_zone` · `sync_angles` · `create_multicam` · `switch_angle` · `build_proxies` ·
-`get_subtitles` · `import_subtitles` · `export_subtitles` · `add_markers` · `capture_frame`
-· `export_project` · `undo` · `list_effects` · `apply_effect` · `get_clip_effects` ·
-`set_effect` · `set_effect_curve` · `remove_effect` · `reorder_effect` · `list_transitions`
-· `add_transition` · `remove_transition`
+`get_subtitles` · `add_subtitles` · `detect_speech` · `import_subtitles` ·
+`export_subtitles` · `add_markers` · `capture_frame` · `export_project` · `undo` ·
+`list_effects` · `apply_effect` · `get_clip_effects` · `set_effect` · `set_effect_curve` ·
+`remove_effect` · `reorder_effect` · `list_transitions` · `add_transition` ·
+`remove_transition`
 
 Tools refuse rather than improvise. An overlapping placement, a duration the media cannot
 supply, or a fade longer than its clip returns an actionable error and changes nothing —
@@ -127,7 +133,7 @@ success-shaped response, and they do not create an undo step.
 ```bash
 npm install
 npm run dev        # Electron with HMR on the renderer
-npm test           # 329 tests: domain, keyframes, render graph, MCP, agent and FFmpeg end-to-end
+npm test           # 343 tests: domain, keyframes, render graph, MCP, agent and FFmpeg end-to-end
 npm run typecheck
 ```
 
