@@ -13,7 +13,7 @@ import { promisify } from 'node:util'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { probeAsset } from '../src/main/media/ffmpeg.js'
+import { FFMPEG_PATH, probeAsset } from '../src/main/media/ffmpeg.js'
 import { createProjectIn, isProjectFolder, loadProject } from '../src/main/project/store.js'
 
 const exec = promisify(execFile)
@@ -33,7 +33,9 @@ async function rushesFolder(name: string, files = 2): Promise<string> {
   const folder = join(root, name)
   await mkdir(folder, { recursive: true })
   for (let i = 1; i <= files; i++) {
-    await exec('ffmpeg', [
+    // The binary the app itself resolves, not whatever the PATH happens to hold:
+    // a CI runner has no system ffmpeg.
+    await exec(FFMPEG_PATH, [
       '-hide_banner', '-v', 'error', '-y',
       '-f', 'lavfi', '-i', `testsrc=size=160x90:rate=30:duration=1`,
       '-c:v', 'libx264', '-pix_fmt', 'yuv420p', join(folder, `take0${i}.mp4`),

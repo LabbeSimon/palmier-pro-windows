@@ -16,7 +16,7 @@ import { join } from 'node:path'
 
 import type { MediaAsset, Project } from '../src/core/model.js'
 import * as ops from '../src/core/ops.js'
-import { FFMPEG_PATH, renderFrame, renderTimeline } from '../src/main/media/ffmpeg.js'
+import { FFMPEG_PATH, FFPROBE_PATH, renderFrame, renderTimeline } from '../src/main/media/ffmpeg.js'
 
 const exec = promisify(execFile)
 
@@ -116,7 +116,7 @@ describe('keyframe rendering', () => {
     const output = join(workDir, 'volume.mp4')
     const timeline = state.timelines[0]!
     await renderTimeline(state, timeline, { outputPath: output, crf: 30, preset: 'ultrafast' }).promise
-    const { stdout } = await exec('ffprobe', [
+    const { stdout } = await exec(FFPROBE_PATH, [
       '-v', 'error', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', output,
     ]).catch(() => ({ stdout: '' }))
     expect(stdout.length >= 0).toBe(true)
