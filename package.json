@@ -1,6 +1,6 @@
 {
   "name": "palmier-win",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "AI-native video editor for Windows. Agents edit the timeline directly over MCP.",
   "license": "Apache-2.0",
   "author": {
