@@ -21,7 +21,14 @@ import { DEFAULT_MODEL, MODELS, readApiKey, readSettings, writeSettings } from '
 import { basename } from 'node:path'
 import { formatSrt, formatVtt, parseSubtitles } from '../core/subtitles.js'
 import { framesToSeconds, secondsToFrames } from '../core/timecode.js'
-import { cacheDirFor, isProjectFolder, loadProject, ProjectStore, saveProject } from './project/store.js'
+import {
+  cacheDirFor,
+  createProjectIn,
+  isProjectFolder,
+  loadProject,
+  ProjectStore,
+  saveProject,
+} from './project/store.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -179,22 +186,50 @@ handle('project:open', async (path?: string) => {
       return { ...snapshot(), message: 'Kept the current project' }
     }
     const picked = await dialog.showOpenDialog(window!, {
-      title: 'Open a .palmier project folder',
-      properties: ['openDirectory'],
-      buttonLabel: 'Open project',
+      title: 'Open a project folder, or pick any folder to start one',
+      properties: ['openDirectory', 'createDirectory'],
+      buttonLabel: 'Open',
     })
     if (picked.canceled || !picked.filePaths[0]) return { ...snapshot(), message: 'Open cancelled' }
     target = picked.filePaths[0]
   }
-  // Validated before loading so the refusal names the folder instead of leaking ENOENT.
+  // A folder without a project is not an error, it is a project waiting to be
+  // made — the same thing Obsidian does when you point it at a plain folder.
   if (!(await isProjectFolder(target))) {
-    throw new OpError(
-      'not_a_project',
-      `"${basename(target)}" is not a Palmier project. Choose a folder that contains project.json.`,
-    )
+    const { response } = await dialog.showMessageBox(window!, {
+      type: 'question',
+      buttons: ['Cancel', 'Create a project here'],
+      defaultId: 1,
+      cancelId: 0,
+      title: 'No project in this folder yet',
+      message: `"${basename(target)}" has no project in it.`,
+      detail:
+        'Create one here? Any video, audio or image already in the folder will be imported into the bin. ' +
+        'Nothing else in the folder is touched.',
+    })
+    if (response !== 1) return { ...snapshot(), message: 'Open cancelled' }
+
+    const created = await createProjectIn(target, probeAsset)
+    store.replace(created.project)
+    store.markSaved(target)
+    ensureThumbnails(created.project)
+
+    // Files that could not be read are named: a card dump with one bad file
+    // must not look like a clean import.
+    const parts = [
+      created.imported.length > 0
+        ? `${created.imported.length} file(s) imported`
+        : 'no media found to import',
+    ]
+    if (created.failures.length > 0) {
+      parts.push(`${created.failures.length} could not be read: ${created.failures[0]}`)
+    }
+    return { ...snapshot(), message: `Created "${created.project.name}" — ${parts.join(' — ')}` }
   }
+
   const loaded = await loadProject(target)
   store.replace(loaded)
+  ensureThumbnails(loaded)
   return { ...snapshot(), message: `Opened "${loaded.name}"` }
 })
 

@@ -39,7 +39,7 @@ Fait et vérifié :
 - Agent intégré + journal d'actions annulables une par une
 - Sous-titres SRT/VTT, étalonnage courbes + roues, proxys, multicam
 - CI + release automatique sur tag, mise à jour dans l'app
-- 321 tests verts ; exe Windows signé non, mais construit et livré
+- 329 tests verts ; exe Windows signé non, mais construit et livré
 
 ---
 
@@ -212,6 +212,19 @@ avec un transport bouchonné, mais aucune requête n'a été envoyée pour de vr
 ---
 
 ## Décisions prises
+
+- **21/09/2026 — Ouvrir un dossier sans projet le crée**, à la Obsidian, et
+  importe les médias déjà présents. Refuser un dossier parce qu'il manque un
+  fichier que l'app écrit elle-même était de la cérémonie. Seuls `project.json`
+  et `cache/` sont ajoutés — un test compare le contenu du dossier avant/après.
+- **21/09/2026 — electron-vite insère son shim CommonJS au mauvais endroit.**
+  L'offset est calculé en **octets UTF-8** mais appliqué comme index de
+  caractères : chaque caractère multi-octets du bundle (un tiret cadratin dans
+  un message suffit) décale l'insertion. Elle a atterri deux fois dans un
+  template literal — une fois le build a cassé, une fois un pavé de JavaScript
+  s'est affiché **dans la barre d'état de l'utilisateur**. Le shim est retiré
+  au build par un plugin : ce processus principal déclare déjà son `__dirname`
+  et n'appelle jamais `require`. `tests/build-output.test.ts` garde le fort.
 
 - **19/09/2026 — Degré de ressemblance : copie fidèle de la disposition.**
   Mêmes docks, mêmes couleurs, mêmes positions de panneaux, mêmes raccourcis.

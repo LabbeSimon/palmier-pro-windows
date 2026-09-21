@@ -16,6 +16,9 @@ licence: TypeScript, Electron and FFmpeg, written from scratch.
 
 ## What works
 
+- **Open a folder, not a file** — point the app at any folder and it offers to make a project
+  there, importing whatever video, audio and images are already in it. Nothing else in the
+  folder is touched.
 - **Timeline editing** — multi-track video, audio and text; trim, retime, split, ripple
   delete, move across tracks, fades, opacity, transform, crop.
 - **Tools** — selection, razor and spacer, with snapping to clip edges, markers and the
@@ -124,7 +127,7 @@ success-shaped response, and they do not create an undo step.
 ```bash
 npm install
 npm run dev        # Electron with HMR on the renderer
-npm test           # 321 tests: domain, keyframes, render graph, MCP, agent and FFmpeg end-to-end
+npm test           # 329 tests: domain, keyframes, render graph, MCP, agent and FFmpeg end-to-end
 npm run typecheck
 ```
 

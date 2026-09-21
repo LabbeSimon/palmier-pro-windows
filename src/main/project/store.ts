@@ -6,13 +6,19 @@
  */
 
 import { EventEmitter } from 'node:events'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { basename, dirname, extname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 
-import { PROJECT_FILE_VERSION, type Project, type ProjectFile } from '../../core/model.js'
-import { emptyProject, OpError, type MutationResult, type Receipt } from '../../core/ops.js'
+import {
+  clipTypeForExtension,
+  PROJECT_FILE_VERSION,
+  type MediaAsset,
+  type Project,
+  type ProjectFile,
+} from '../../core/model.js'
+import { addAssets, emptyProject, OpError, type MutationResult, type Receipt } from '../../core/ops.js'
 
 const UNDO_DEPTH = 100
 const JOURNAL_DEPTH = 200
@@ -333,6 +339,50 @@ export async function isProjectFolder(folderPath: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/**
+ * Turns a plain folder into a project, importing whatever media is already in it.
+ *
+ * Pointing the editor at a folder of rushes and getting a working project is
+ * the shape people expect from Obsidian and from every modern editor; refusing
+ * a folder because it lacks a file the app itself writes was pure ceremony.
+ *
+ * Media is looked for one level deep only: a rushes folder is flat, and walking
+ * a whole drive because someone picked their home directory would be worse than
+ * importing nothing.
+ */
+export async function createProjectIn(
+  folderPath: string,
+  probe: (path: string) => Promise<MediaAsset>,
+): Promise<{ project: Project; imported: MediaAsset[]; failures: string[] }> {
+  const name = basename(folderPath).replace(/\.palmier$/i, '') || 'Untitled'
+  let project = await saveProject({ ...emptyProject(name), path: null }, folderPath)
+
+  const candidates: string[] = []
+  for (const entry of await readdir(folderPath, { withFileTypes: true })) {
+    if (!entry.isFile()) continue
+    if (!clipTypeForExtension(extname(entry.name))) continue
+    candidates.push(join(folderPath, entry.name))
+  }
+  candidates.sort()
+
+  const imported: MediaAsset[] = []
+  const failures: string[] = []
+  for (const path of candidates) {
+    try {
+      imported.push(await probe(path))
+    } catch (error) {
+      failures.push(`${basename(path)}: ${(error as Error).message}`)
+    }
+  }
+
+  if (imported.length > 0) {
+    const result = addAssets(project, imported)
+    // Written straight back out, so the folder on disk matches what is on screen.
+    project = await saveProject(result.project, folderPath)
+  }
+  return { project, imported, failures }
 }
 
 export async function loadProject(projectPath: string): Promise<Project> {
