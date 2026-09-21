@@ -15,7 +15,7 @@
  */
 
 import { mkdir, readdir, stat, unlink, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { statSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { timelineTotalFrames, type Project, type Timeline } from '../../core/model.js'
@@ -55,8 +55,27 @@ function chunkDir(cacheDir: string): string {
   return join(cacheDir, 'preview-chunks')
 }
 
+function chunkFileName(chunk: Chunk): string {
+  return `chunk-${chunk.fingerprint}.mp4`
+}
+
 function chunkPath(cacheDir: string, chunk: Chunk): string {
-  return join(chunkDir(cacheDir), `chunk-${chunk.fingerprint}.mp4`)
+  return join(chunkDir(cacheDir), chunkFileName(chunk))
+}
+
+/**
+ * A cached file counts only if it holds something.
+ *
+ * A render that failed or was cancelled leaves the output behind, and treating
+ * that as a finished slice makes the preview report itself ready and then fail
+ * to open — which reads as a playback bug rather than a render that died.
+ */
+function usable(path: string): boolean {
+  try {
+    return statSync(path).size > 0
+  } catch {
+    return false
+  }
 }
 
 export function previewPathFor(cacheDir: string, fingerprint: string): string {
@@ -70,7 +89,7 @@ export function planPreview(project: Project, timeline: Timeline, cacheDir: stri
   const to = zone?.outFrame ?? timelineTotalFrames(timeline)
 
   const chunks = planChunks(project, timeline, from, to)
-  const dirty = chunks.filter((chunk) => !existsSync(chunkPath(cacheDir, chunk)))
+  const dirty = chunks.filter((chunk) => !usable(chunkPath(cacheDir, chunk)))
   const startFrame = chunks[0]?.startFrame ?? 0
   const endFrame = chunks[chunks.length - 1]?.endFrame ?? startFrame
 
@@ -102,7 +121,7 @@ export function existingPreview(
 ): PreviewState | null {
   const plan = planPreview(project, timeline, cacheDir)
   const path = previewPathFor(cacheDir, plan.fingerprint)
-  if (!existsSync(path)) return null
+  if (!usable(path)) return null
   return {
     fingerprint: plan.fingerprint,
     path,
@@ -144,7 +163,7 @@ export function renderPreview(
     fps: timeline.fps,
   }
 
-  if (existsSync(path)) {
+  if (usable(path)) {
     return { promise: Promise.resolve(state), cancel: () => {} }
   }
 
@@ -195,16 +214,26 @@ export function renderPreview(
       done += chunk.endFrame - chunk.startFrame
     }
 
-    // Stitching is a stream copy: the slices were all encoded with the same
-    // settings at the same size, so nothing is decoded again here.
+    /*
+     * Stitching is a stream copy: the slices were all encoded with the same
+     * settings at the same size, so nothing is decoded again here.
+     *
+     * The list holds bare file names, not paths. The concat demuxer resolves
+     * them against the list's own directory, and it treats a backslash inside a
+     * quoted entry as an escape — so a Windows path written in full comes back
+     * mangled and none of the slices open.
+     */
     const list = join(chunkDir(cacheDir), `list-${plan.fingerprint}.txt`)
     await writeFile(
       list,
-      plan.chunks.map((chunk) => `file '${chunkPath(cacheDir, chunk).replace(/'/g, "'\\''")}'`).join('\n'),
+      plan.chunks.map((chunk) => `file '${chunkFileName(chunk)}'`).join('\n'),
       'utf8',
     )
-    await concatFiles(list, path)
-    await unlink(list).catch(() => {})
+    try {
+      await concatFiles(list, path)
+    } finally {
+      await unlink(list).catch(() => {})
+    }
 
     await prune(cacheDir, plan)
     return state

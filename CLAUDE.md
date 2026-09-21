@@ -214,6 +214,22 @@ avec un transport bouchonné, mais aucune requête n'a été envoyée pour de vr
 
 ## Décisions prises
 
+- **22/09/2026 — « media error 4 » n'était pas un bug de lecture.**
+  Deux défauts, tous deux à moi, qui donnaient le même symptôme :
+  `DEMUXER_ERROR_COULD_NOT_OPEN` sur un fichier que l'app annonçait prêt.
+  1. **Un rendu mort laissait son fichier.** Le cache testait `existsSync` :
+     un fichier tronqué ou vide passait donc pour une tranche finie, la
+     preview se disait prête, et le lecteur échouait à l'ouvrir. Le cache
+     exige désormais une **taille non nulle**, et un rendu qui échoue ou qu'on
+     annule **efface sa sortie** avant de rejeter.
+  2. **La liste de concaténation contenait des chemins Windows.** Le demuxer
+     `concat` traite l'antislash comme une échappée dans une entrée quotée :
+     `C:\Users\...` revient mutilé et aucune tranche ne s'ouvre. La liste ne
+     contient plus que des **noms de fichiers**, résolus par le demuxer contre
+     le dossier de la liste — plus aucun séparateur à échapper.
+  Non reproduit sous Linux : Chromium y ouvre le fichier collé sans broncher.
+  C'est en cherchant pourquoi que les deux trous sont apparus.
+
 - **21/09/2026 — La preview se rend par tranches de 4 s, pas d'un bloc.**
   Réencoder tout le montage parce qu'un clip a bougé coûtait des minutes pour
   voir un changement qui touche quatre secondes. Chaque tranche est indexée par

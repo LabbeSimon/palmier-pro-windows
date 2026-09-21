@@ -5,7 +5,7 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, extname, basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
@@ -246,6 +246,7 @@ export function renderTimeline(
     await mkdir(dirname(options.outputPath), { recursive: true })
 
     return await new Promise<string>((resolve, reject) => {
+      logCommand(FFMPEG_PATH, command.args)
       child = spawn(FFMPEG_PATH, command.args, { windowsHide: true })
       let stderr = ''
       let buffer = ''
@@ -273,9 +274,22 @@ export function renderTimeline(
       })
       child.on('error', (error) => reject(new FFmpegError(`ffmpeg failed to start: ${error.message}`, stderr, null)))
       child.on('close', (code) => {
-        if (controller.signal.aborted) return reject(new FFmpegError('render cancelled', stderr.slice(-2000), code))
-        if (code === 0) return resolve(options.outputPath)
-        reject(new FFmpegError(`ffmpeg exited with ${code}`, stderr.slice(-4000), code))
+        if (code === 0 && !controller.signal.aborted) return resolve(options.outputPath)
+        /*
+         * Remove what was written before giving up.
+         *
+         * A cancelled or failed render leaves a truncated file behind, and
+         * anything that caches by "does this path exist" then calls it ready.
+         * The player opens it, fails, and reports a playback error for what was
+         * really a render that died.
+         */
+        void rm(options.outputPath, { force: true }).finally(() => {
+          if (controller.signal.aborted) {
+            reject(new FFmpegError('render cancelled', stderr.slice(-2000), code))
+          } else {
+            reject(new FFmpegError(`ffmpeg exited with ${code}`, stderr.slice(-4000), code))
+          }
+        })
       })
     })
   })()
@@ -298,6 +312,18 @@ export function renderTimeline(
  */
 export async function concatFiles(listPath: string, outputPath: string): Promise<string> {
   await mkdir(dirname(outputPath), { recursive: true })
+  try {
+    await runConcat(listPath, outputPath)
+  } catch (error) {
+    // A half-written file is worse than none: the cache would call it ready and
+    // the player would fail to open it, which looks like a playback bug.
+    await rm(outputPath, { force: true })
+    throw error
+  }
+  return outputPath
+}
+
+async function runConcat(listPath: string, outputPath: string): Promise<void> {
   await run(FFMPEG_PATH, [
     '-hide_banner', '-nostdin', '-y',
     // `safe 0` because the list holds absolute paths, which is what we write.
@@ -307,7 +333,6 @@ export async function concatFiles(listPath: string, outputPath: string): Promise
     '-movflags', '+faststart',
     outputPath,
   ])
-  return outputPath
 }
 
 export async function renderFrame(
