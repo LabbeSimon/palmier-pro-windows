@@ -289,6 +289,27 @@ export function renderTimeline(
   }
 }
 
+/**
+ * Joins files listed in a concat-demuxer list into one, without re-encoding.
+ *
+ * The inputs must share codec, size and rate — they do, because the preview
+ * encodes every slice with the same settings. This is a remux: a long timeline
+ * stitches in seconds where re-encoding it would take minutes.
+ */
+export async function concatFiles(listPath: string, outputPath: string): Promise<string> {
+  await mkdir(dirname(outputPath), { recursive: true })
+  await run(FFMPEG_PATH, [
+    '-hide_banner', '-nostdin', '-y',
+    // `safe 0` because the list holds absolute paths, which is what we write.
+    '-f', 'concat', '-safe', '0',
+    '-i', listPath,
+    '-c', 'copy',
+    '-movflags', '+faststart',
+    outputPath,
+  ])
+  return outputPath
+}
+
 export async function renderFrame(
   project: Project,
   timeline: Timeline,

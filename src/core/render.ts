@@ -41,6 +41,31 @@ export interface RenderOptions {
    * never does, so what is delivered is always built from the originals.
    */
   useProxies?: boolean
+  /**
+   * Encoder to use, probed by the main process.
+   *
+   * Passed in as data rather than looked up here, so this module stays pure and
+   * the chosen encoder is visible in the argv a test can read.
+   */
+  encoder?: EncoderSpec
+}
+
+/**
+ * What the render graph needs to know about an encoder.
+ *
+ * Mirrors `main/media/encoders.ts` without importing it: `src/core` owns no
+ * I/O and cannot probe hardware.
+ */
+export interface EncoderSpec {
+  name: string
+  /** Arguments that must come before the inputs, to open the device. */
+  deviceArgs?: string[]
+  /** Filter that moves frames onto the GPU, appended last in the video chain. */
+  uploadFilter?: string | null
+  /** Rate-control arguments; replaces `-crf`. */
+  qualityArgs?: string[]
+  /** False for hardware encoders, which reject x264's preset names. */
+  usesPreset?: boolean
 }
 
 export interface Sidecar {
@@ -438,11 +463,15 @@ export function buildRenderCommand(
     }
   }
 
+  // A hardware encoder reads GPU surfaces, so the upload is the last thing the
+  // chain does — after every filter, which all work on CPU frames.
+  const upload = options.encoder?.uploadFilter
+  const tail = upload ? `format=yuv420p,${upload}` : 'format=yuv420p'
   if (videoStage === 0) {
     // Nothing visual: still emit a valid stream so the file is playable.
-    filters.push(`[base]null[vout]`)
+    filters.push(upload ? `[base]${upload}[vout]` : `[base]null[vout]`)
   } else {
-    filters.push(`[${videoLabel}]format=yuv420p[vout]`)
+    filters.push(`[${videoLabel}]${tail}[vout]`)
   }
 
   const hasAudio = audioLabels.length > 0
@@ -455,10 +484,16 @@ export function buildRenderCommand(
     )
   }
 
+  const encoder = options.encoder
+  const codec = encoder?.name ?? options.videoCodec ?? 'libx264'
+  const usesPreset = encoder ? encoder.usesPreset !== false : true
+  const quality = encoder?.qualityArgs ?? ['-crf', String(options.crf ?? 20)]
+
   const args = [
     '-hide_banner',
     '-nostdin',
     '-y',
+    ...(encoder?.deviceArgs ?? []),
     ...inputArgs,
     '-filter_complex',
     filters.join(';'),
@@ -466,13 +501,12 @@ export function buildRenderCommand(
     '[vout]',
     ...(hasAudio ? ['-map', '[aout]'] : []),
     '-c:v',
-    options.videoCodec ?? 'libx264',
-    '-preset',
-    options.preset ?? 'medium',
-    '-crf',
-    String(options.crf ?? 20),
-    '-pix_fmt',
-    'yuv420p',
+    codec,
+    ...(usesPreset ? ['-preset', options.preset ?? 'medium'] : []),
+    ...quality,
+    // A GPU encoder produces its own pixel format; forcing one here would
+    // insert a download and undo the point of using it.
+    ...(encoder?.uploadFilter ? [] : ['-pix_fmt', 'yuv420p']),
     '-r',
     String(fps),
     ...(hasAudio ? ['-c:a', 'aac', '-b:a', options.audioBitrate ?? '192k'] : []),

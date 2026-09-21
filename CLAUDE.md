@@ -39,7 +39,8 @@ Fait et vérifié :
 - Agent intégré + journal d'actions annulables une par une
 - Sous-titres SRT/VTT, étalonnage courbes + roues, proxys, multicam
 - CI + release automatique sur tag, mise à jour dans l'app
-- 343 tests verts ; exe Windows signé non, mais construit et livré
+- Preview incrémentale par tranches, encodage GPU quand disponible
+- 359 tests verts ; exe Windows signé non, mais construit et livré
 
 ---
 
@@ -212,6 +213,27 @@ avec un transport bouchonné, mais aucune requête n'a été envoyée pour de vr
 ---
 
 ## Décisions prises
+
+- **21/09/2026 — La preview se rend par tranches de 4 s, pas d'un bloc.**
+  Réencoder tout le montage parce qu'un clip a bougé coûtait des minutes pour
+  voir un changement qui touche quatre secondes. Chaque tranche est indexée par
+  une empreinte de **ce qui se passe dedans seulement**, seules les sales sont
+  encodées, et le tout est recollé en **copie de flux** (un remux, pas un
+  réencodage). Mesuré sur 2 min de timeline : **114,5 s → 4,3 s (×26)** après
+  l'ajout d'un titre de 2 s.
+  Défaut trouvé par le test : empreinter **toutes** les pistes salissait tout
+  le montage dès qu'on ajoutait une piste. Seules les pistes qui ont un clip
+  dans la tranche comptent désormais, leur ordre relatif étant conservé pour
+  garder le compositing dans la clé.
+- **21/09/2026 — Encodage matériel quand la machine en a un.**
+  Sondé, pas déduit : notre FFmpeg est compilé avec NVENC, QSV, AMF et VAAPI,
+  et sur une machine sans runtime constructeur **les quatre sont listés et
+  aucun ne marche**. Chaque candidat encode donc 0,4 s de noir avant d'être
+  retenu ; sinon libx264. La preview le prend toujours, l'export par défaut
+  avec une case pour revenir au CPU. `PALMIER_ENCODER=libx264` force.
+  **Non vérifié ici** : msi n'a ni libcuda ni VA display, donc le repli est
+  prouvé mais pas l'encodage GPU lui-même. Ça se verra sur le portable —
+  l'encodeur retenu est affiché sous le moniteur.
 
 - **21/09/2026 — L'agent peut enfin écrire des sous-titres.** Il manquait
   `add_subtitles` en MCP : il savait lire et importer, jamais écrire une seule

@@ -154,8 +154,8 @@ const api = {
     frame: (frame: number) => invoke<string>('render:frame', frame),
     assetFrame: (assetId: string, seconds: number) =>
       invoke<string>('render:assetFrame', { assetId, seconds }),
-    export: (args: { outputPath?: string; quality?: 'draft' | 'balanced' | 'high' }) =>
-      invoke<{ cancelled: boolean; outputPath?: string }>('render:export', args),
+    export: (args: { outputPath?: string; quality?: 'draft' | 'balanced' | 'high'; hardware?: boolean }) =>
+      invoke<{ cancelled: boolean; outputPath?: string; encoder?: string }>('render:export', args),
     cancel: () => invoke<{ cancelled: boolean }>('render:cancel'),
     onProgress: (listener: (progress: RenderProgress) => void) => subscribe('render:progress', listener),
   },
@@ -180,6 +180,7 @@ const api = {
   },
   system: {
     info: () => invoke<{ ffmpeg: string; electron: string; node: string }>('system:info'),
+    encoder: () => invoke<{ name: string; label: string; hardware: boolean }>('system:encoder'),
     reveal: (path: string) => invoke<boolean>('shell:reveal', path),
     copyToClipboard: (text: string) => invoke<boolean>('clipboard:write', text),
     onMcpStatus: (listener: (status: Snapshot['mcp']) => void) => subscribe('mcp:status', listener),

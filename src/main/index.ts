@@ -13,6 +13,7 @@ import { buildMenu } from './menu.js'
 import { existingPreview, fingerprintTimeline, renderPreview, type PreviewJob } from './media/preview.js'
 import { buildProxies, canProxy, existingProxy, PROXY_WIDTH, type ProxyJob } from './media/proxy.js'
 import { CONFIDENT, syncByAudio, SyncError } from './media/sync.js'
+import { bestEncoder, SOFTWARE, toSpec } from './media/encoders.js'
 import { checkForUpdate, downloadUpdate, initUpdater, installUpdate, updateState } from './updater.js'
 import { MCPServer, DEFAULT_MCP_PORT } from './mcp/server.js'
 import { TOOLS_BY_NAME } from './mcp/tools.js'
@@ -672,7 +673,11 @@ handle('preview:cancel', () => {
   return { cancelled: true }
 })
 
-handle('render:export', async (args: { outputPath?: string; quality?: 'draft' | 'balanced' | 'high' }) => {
+handle('render:export', async (args: {
+  outputPath?: string
+  quality?: 'draft' | 'balanced' | 'high'
+  hardware?: boolean
+}) => {
   if (activeExport) throw new OpError('refused', 'an export is already running; cancel it first')
 
   const project = store.project
@@ -689,19 +694,30 @@ handle('render:export', async (args: { outputPath?: string; quality?: 'draft' | 
   }
 
   const quality = args?.quality ?? 'balanced'
-  const encoder = {
+  const settings = {
     draft: { crf: 28, preset: 'veryfast' as const },
     balanced: { crf: 20, preset: 'medium' as const },
     high: { crf: 16, preset: 'slow' as const },
   }[quality]
 
-  const handleRender = renderTimeline(project, timeline, { outputPath, ...encoder }, (progress) => {
-    window?.webContents.send('render:progress', progress)
-  })
+  /*
+   * Hardware by default, because the wait is what people actually feel.
+   *
+   * At the same target a GPU encoder gives up some efficiency against x264 on a
+   * slow preset — a slightly larger file for the same picture. It is many times
+   * faster, and it can be turned off per export when the size matters more.
+   */
+  const chosen = args?.hardware === false ? SOFTWARE : await bestEncoder()
+  const handleRender = renderTimeline(
+    project,
+    timeline,
+    { outputPath, ...settings, encoder: toSpec(chosen, settings.crf) },
+    (progress) => window?.webContents.send('render:progress', progress),
+  )
   activeExport = handleRender
   try {
     await handleRender.promise
-    return { cancelled: false, outputPath }
+    return { cancelled: false, outputPath, encoder: chosen.label }
   } finally {
     activeExport = null
   }
@@ -721,6 +737,11 @@ handle('clipboard:write', (text: string) => {
 handle('shell:reveal', (path: string) => {
   shell.showItemInFolder(path)
   return true
+})
+
+handle('system:encoder', async () => {
+  const encoder = await bestEncoder()
+  return { name: encoder.name, label: encoder.label, hardware: encoder.hardware }
 })
 
 handle('system:info', async () => ({

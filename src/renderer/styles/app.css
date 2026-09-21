@@ -2088,3 +2088,7 @@ input[type='range']:hover::-webkit-slider-thumb {
 }
 
 .tabs > button[draggable='true'] { cursor: grab; }
+
+/* The GPU doing the encoding is worth noticing; the CPU doing it is worth
+   noticing for the opposite reason. */
+.proxy-note.hardware { color: var(--ok); }

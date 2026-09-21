@@ -29,6 +29,17 @@ interface Props {
  * always states which of the two you are looking at.
  */
 export function ProjectMonitor(props: Props) {
+  /*
+   * Which encoder the machine settled on.
+   *
+   * Probed once in the main process; shown here because "why is this slow" is
+   * answered by whether the GPU is doing the work, and guessing is no fun.
+   */
+  const [encoder, setEncoder] = useState<{ label: string; hardware: boolean } | null>(null)
+  useEffect(() => {
+    void window.palmier.system.encoder().then((result) => result.ok && setEncoder(result.value))
+  }, [])
+
   const { player, timeline, frame } = props
   const video = useRef<HTMLVideoElement>(null)
   const seeking = useRef(false)
@@ -143,6 +154,18 @@ export function ProjectMonitor(props: Props) {
               {proxySize ? (
                 <span className="proxy-note" title="The preview is a reduced-resolution proxy; the export is full size">
                   proxy {proxySize}
+                </span>
+              ) : null}
+              {encoder ? (
+                <span
+                  className={`proxy-note${encoder.hardware ? ' hardware' : ''}`}
+                  title={
+                    encoder.hardware
+                      ? 'Encoding on the GPU. Set PALMIER_ENCODER=libx264 to force the CPU.'
+                      : 'No usable GPU encoder was found on this machine, so encoding runs on the CPU.'
+                  }
+                >
+                  {encoder.label}
                 </span>
               ) : null}
               {dropped > 0 ? (

@@ -42,6 +42,12 @@ licence: TypeScript, Electron and FFmpeg, written from scratch.
   this build: the words have to come from you, a script, or an imported file.
 - **Subtitles** — import and export .srt and .vtt, edit the text in a panel, and retime cues on
   the timeline with the same trim and move as any other clip. They are burnt into the render.
+- **Incremental preview** — the timeline preview is rendered in four-second slices, each keyed
+  by what happens inside it alone. Change a title and one slice is re-encoded, not the film:
+  measured at 114.5 s to 4.3 s on a two-minute timeline. The slices are stitched by stream copy.
+- **Hardware encoding** — NVENC, Quick Sync, AMF and VAAPI are probed by actually encoding with
+  them, because an FFmpeg build lists encoders it cannot run. The preview always takes the fast
+  one; exports default to it with a way back to libx264. `PALMIER_ENCODER` forces a choice.
 - **Proxy clips** — one button transcodes every oversized video to a 640-wide all-intra copy
   so scrubbing stays responsive on a laptop. Preview and playback read the proxy; **an export
   always reads the original**, so this costs nothing in the delivered file.
@@ -82,6 +88,8 @@ src/main/      Electron main process.
   media/proxy.ts    Editing stand-ins: all-intra transcode, cache keyed by size and mtime.
   media/sync.ts     Multicam sync: loudness-envelope correlation, with a confidence.
   media/speech.ts   Voice activity: where a take carries sound, for timing captions.
+  media/chunks.ts   Preview slicing: which four seconds of the edit actually changed.
+  media/encoders.ts Encoder selection, probed rather than assumed.
   mcp/server.ts     JSON-RPC 2.0 over Streamable HTTP.
   mcp/tools.ts      The tool surface.
   agent/            The built-in agent: Anthropic client, tool loop, key storage.
@@ -133,7 +141,7 @@ success-shaped response, and they do not create an undo step.
 ```bash
 npm install
 npm run dev        # Electron with HMR on the renderer
-npm test           # 343 tests: domain, keyframes, render graph, MCP, agent and FFmpeg end-to-end
+npm test           # 359 tests: domain, keyframes, render graph, MCP, agent and FFmpeg end-to-end
 npm run typecheck
 ```
 

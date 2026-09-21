@@ -50,21 +50,36 @@ function fingerprintRange(
     return from < endFrame && clipEndFrame(clip) > startFrame
   }
 
+  /*
+   * Only tracks that reach into this slice.
+   *
+   * Including the empty ones made adding a track dirty the entire timeline,
+   * which defeats the whole point. A track with nothing here changes nothing
+   * here — and the relative order of the ones that do carry clips is kept, so
+   * compositing order is still part of the key.
+   */
+  const contributing = timeline.tracks
+    .map((track) => ({ track, clips: track.clips.filter(overlapping) }))
+    .filter((entry) => entry.clips.length > 0)
+
   const relevant = {
     fps: timeline.fps,
     width: timeline.width,
     height: timeline.height,
     startFrame,
     endFrame,
-    tracks: timeline.tracks.map((track) => ({
+    tracks: contributing.map(({ track, clips }) => ({
+      // The index keeps layering in the key: a clip that moves down a track
+      // composites differently even if nothing else changed.
+      layer: timeline.tracks.indexOf(track),
       muted: track.muted,
       hidden: track.hidden,
       volume: track.volume,
       // Ids are stable across an edit that does not change the result.
-      clips: track.clips.filter(overlapping).map((clip) => ({ ...clip, id: undefined })),
+      clips: clips.map((clip) => ({ ...clip, id: undefined })),
     })),
-    assets: timeline.tracks
-      .flatMap((track) => track.clips.filter(overlapping).map((clip) => clip.mediaRef))
+    assets: contributing
+      .flatMap(({ clips }) => clips.map((clip) => clip.mediaRef))
       .filter(Boolean)
       .sort()
       .map((id) => {

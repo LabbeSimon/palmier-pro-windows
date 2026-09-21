@@ -42,10 +42,20 @@ describe('preview fingerprint', () => {
     expect(print(muted)).not.toBe(print(project))
   })
 
-  it('changes when the work zone moves, because the proxy covers the zone', () => {
+  it('survives a work zone that stays inside the same slices', () => {
+    // Slices are aligned to absolute frames, never to the zone, so nudging the
+    // in point no longer throws the whole cache away. This is the behaviour
+    // chunking bought: the old whole-timeline proxy had to rebuild for this.
     const { project } = fixture()
     const zoned = ops.setWorkZone(project, { inFrame: 10, outFrame: 60 }).project
-    expect(print(zoned)).not.toBe(print(project))
+    expect(print(zoned)).toBe(print(project))
+  })
+
+  it('changes when the zone reaches into a slice it did not cover', () => {
+    const { project } = fixture()
+    const short = ops.setWorkZone(project, { inFrame: 0, outFrame: 30 }).project
+    const long = ops.setWorkZone(project, { inFrame: 0, outFrame: 400 }).project
+    expect(print(long)).not.toBe(print(short))
   })
 
   it('ignores importing media that no clip uses', () => {
@@ -66,12 +76,13 @@ describe('preview fingerprint', () => {
     expect(print(renamed)).toBe(print(project))
   })
 
-  it('invalidates on an empty new track, erring towards re-rendering', () => {
+  it('is free to add an empty track', () => {
     const { project } = fixture()
     const extended = ops.addTrack(project, { type: 'video', name: 'V2' }).project
-    // An empty track changes nothing on screen, so this is a needless rebuild.
-    // It is the safe direction: over-invalidating costs an encode, while
-    // under-invalidating would play a cut that no longer exists.
-    expect(print(extended)).not.toBe(print(project))
+    // An empty track changes nothing on screen. The old whole-timeline proxy
+    // rebuilt anyway, erring towards safety; a slice keyed on the clips that
+    // actually reach into it can afford to be exact, and adding a track before
+    // dropping a title on it is too common a gesture to make expensive.
+    expect(print(extended)).toBe(print(project))
   })
 })

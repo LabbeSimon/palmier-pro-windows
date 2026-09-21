@@ -2,89 +2,112 @@
  * Timeline preview rendering.
  *
  * Playing an edit frame by frame through FFmpeg costs ~300 ms per frame, which
- * is a slideshow, not playback. So the timeline is rendered once to a small
- * proxy file and played back as ordinary video — the same trick Kdenlive calls
- * timeline preview rendering.
+ * is a slideshow, not playback. So the timeline is rendered to a small proxy
+ * file and played back as ordinary video — the trick Kdenlive calls timeline
+ * preview rendering.
  *
- * The proxy is keyed by a fingerprint of the timeline. Any edit changes the
- * fingerprint, which marks the proxy stale rather than silently playing an old
- * cut.
+ * It is rendered in slices. Re-encoding the whole edit because one clip moved
+ * costs minutes on a long timeline to see a change that affects four seconds of
+ * it, so each slice is keyed by a fingerprint of what happens inside it alone,
+ * and only the dirty ones are encoded. The rest are reused from the cache and
+ * the lot is stitched together by stream copy, which is a remux rather than a
+ * re-encode: seconds instead of minutes.
  */
 
-import { createHash } from 'node:crypto'
-import { mkdir, readdir, stat, unlink } from 'node:fs/promises'
+import { mkdir, readdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { timelineTotalFrames, type Project, type Timeline } from '../../core/model.js'
-import { renderTimeline, type RenderHandle, type RenderProgress } from './ffmpeg.js'
+import { concatFiles, renderTimeline, type RenderHandle, type RenderProgress } from './ffmpeg.js'
+import { bestEncoder, toSpec } from './encoders.js'
+import { planChunks, planFingerprint, type Chunk } from './chunks.js'
 
 /** Proxy height. 540p plays smoothly on modest hardware and still shows framing. */
 const PREVIEW_HEIGHT = 540
-const KEEP_PROXIES = 4
+
+/** How many stitched previews to keep. Slices are pruned by age separately. */
+const KEEP_PREVIEWS = 4
+
+/** Slices to keep in the cache. Generous: reusing one is the entire point. */
+const KEEP_CHUNKS = 400
 
 export interface PreviewState {
-  /** Fingerprint of the timeline this proxy was rendered from. */
+  /** Fingerprint of the plan this proxy was rendered from. */
   fingerprint: string
   path: string
   totalFrames: number
   fps: number
-  /** Frame the proxy starts at — the work zone in, or zero. */
+  /** Frame the proxy starts at — the slice containing the work zone in, or zero. */
   startFrame: number
 }
 
-/**
- * Everything that changes the picture or the sound. Panel layout, selection and
- * playhead deliberately do not, or every click would invalidate the proxy.
- */
-export function fingerprintTimeline(project: Project, timeline: Timeline): string {
-  const relevant = {
-    fps: timeline.fps,
-    width: timeline.width,
-    height: timeline.height,
-    zone: timeline.workZone,
-    tracks: timeline.tracks.map((track) => ({
-      muted: track.muted,
-      hidden: track.hidden,
-      volume: track.volume,
-      clips: track.clips.map((clip) => ({
-        ...clip,
-        // Ids are stable across an edit that does not change the result.
-        id: undefined,
-      })),
-    })),
-    // Only the assets actually used, so importing a file does not invalidate.
-    assets: timeline.tracks
-      .flatMap((t) => t.clips.map((c) => c.mediaRef))
-      .filter(Boolean)
-      .sort()
-      .map((id) => {
-        const asset = project.assets.find((a) => a.id === id)
-        return asset ? `${asset.path}:${asset.durationSeconds}` : id
-      }),
-  }
-  return createHash('sha1').update(JSON.stringify(relevant)).digest('hex').slice(0, 16)
+export interface PreviewPlan {
+  chunks: Chunk[]
+  /** Slices that have no cached file and must be encoded. */
+  dirty: Chunk[]
+  fingerprint: string
+  startFrame: number
+  totalFrames: number
+}
+
+function chunkDir(cacheDir: string): string {
+  return join(cacheDir, 'preview-chunks')
+}
+
+function chunkPath(cacheDir: string, chunk: Chunk): string {
+  return join(chunkDir(cacheDir), `chunk-${chunk.fingerprint}.mp4`)
 }
 
 export function previewPathFor(cacheDir: string, fingerprint: string): string {
   return join(cacheDir, `preview-${fingerprint}.mp4`)
 }
 
-/** An already-rendered proxy for this exact edit, or null. */
+/** The slices this preview needs, and which of them are missing. */
+export function planPreview(project: Project, timeline: Timeline, cacheDir: string): PreviewPlan {
+  const zone = timeline.workZone
+  const from = zone?.inFrame ?? 0
+  const to = zone?.outFrame ?? timelineTotalFrames(timeline)
+
+  const chunks = planChunks(project, timeline, from, to)
+  const dirty = chunks.filter((chunk) => !existsSync(chunkPath(cacheDir, chunk)))
+  const startFrame = chunks[0]?.startFrame ?? 0
+  const endFrame = chunks[chunks.length - 1]?.endFrame ?? startFrame
+
+  return {
+    chunks,
+    dirty,
+    fingerprint: planFingerprint(chunks),
+    startFrame,
+    totalFrames: endFrame - startFrame,
+  }
+}
+
+/**
+ * Kept for the fingerprint the UI shows; a plan's fingerprint changes exactly
+ * when at least one of its slices does.
+ */
+export function fingerprintTimeline(project: Project, timeline: Timeline): string {
+  const zone = timeline.workZone
+  const from = zone?.inFrame ?? 0
+  const to = zone?.outFrame ?? timelineTotalFrames(timeline)
+  return planFingerprint(planChunks(project, timeline, from, to))
+}
+
+/** An already-stitched proxy for this exact edit, or null. */
 export function existingPreview(
   project: Project,
   timeline: Timeline,
   cacheDir: string,
 ): PreviewState | null {
-  const fingerprint = fingerprintTimeline(project, timeline)
-  const path = previewPathFor(cacheDir, fingerprint)
+  const plan = planPreview(project, timeline, cacheDir)
+  const path = previewPathFor(cacheDir, plan.fingerprint)
   if (!existsSync(path)) return null
-  const zone = timeline.workZone
   return {
-    fingerprint,
+    fingerprint: plan.fingerprint,
     path,
-    startFrame: zone?.inFrame ?? 0,
-    totalFrames: (zone?.outFrame ?? timelineTotalFrames(timeline)) - (zone?.inFrame ?? 0),
+    startFrame: plan.startFrame,
+    totalFrames: plan.totalFrames,
     fps: timeline.fps,
   }
 }
@@ -94,27 +117,30 @@ export interface PreviewJob {
   cancel: () => void
 }
 
-/**
- * Renders the work zone — or the whole timeline when there is none — to a proxy.
- * Reuses an existing proxy for the same fingerprint instead of re-encoding.
- */
+/** The half-height stand-in the preview is rendered at. */
+function previewTimeline(timeline: Timeline): Timeline {
+  const scale = Math.min(1, PREVIEW_HEIGHT / timeline.height)
+  return {
+    ...timeline,
+    width: Math.max(2, Math.round((timeline.width * scale) / 2) * 2),
+    height: Math.max(2, Math.round((timeline.height * scale) / 2) * 2),
+  }
+}
+
 export function renderPreview(
   project: Project,
   timeline: Timeline,
   cacheDir: string,
   onProgress?: (progress: RenderProgress) => void,
 ): PreviewJob {
-  const fingerprint = fingerprintTimeline(project, timeline)
-  const path = previewPathFor(cacheDir, fingerprint)
-  const zone = timeline.workZone
-  const startFrame = zone?.inFrame ?? 0
-  const endFrame = zone?.outFrame ?? timelineTotalFrames(timeline)
+  const plan = planPreview(project, timeline, cacheDir)
+  const path = previewPathFor(cacheDir, plan.fingerprint)
 
   const state: PreviewState = {
-    fingerprint,
+    fingerprint: plan.fingerprint,
     path,
-    startFrame,
-    totalFrames: endFrame - startFrame,
+    startFrame: plan.startFrame,
+    totalFrames: plan.totalFrames,
     fps: timeline.fps,
   }
 
@@ -123,56 +149,100 @@ export function renderPreview(
   }
 
   let handle: RenderHandle | null = null
-  const promise = (async () => {
-    await mkdir(cacheDir, { recursive: true })
+  let cancelled = false
 
-    // Half-height proxy, keeping the timeline's aspect and an even width.
-    const scale = Math.min(1, PREVIEW_HEIGHT / timeline.height)
-    const previewTimeline: Timeline = {
-      ...timeline,
-      width: Math.max(2, Math.round((timeline.width * scale) / 2) * 2),
-      height: Math.max(2, Math.round((timeline.height * scale) / 2) * 2),
+  const promise = (async () => {
+    await mkdir(chunkDir(cacheDir), { recursive: true })
+    const small = previewTimeline(timeline)
+    // A preview is throwaway, so speed beats everything: the GPU encoder is
+    // used whenever the machine has a working one.
+    const encoder = toSpec(await bestEncoder(), 28)
+
+    // Progress is reported across the dirty slices only, because those are the
+    // only ones costing anything. Saying "12/300 frames" while reusing 288 of
+    // them would read as broken.
+    const totalDirtyFrames = plan.dirty.reduce(
+      (sum, chunk) => sum + (chunk.endFrame - chunk.startFrame),
+      0,
+    )
+    let done = 0
+
+    for (const chunk of plan.dirty) {
+      if (cancelled) throw new Error('cancelled')
+      const target = chunkPath(cacheDir, chunk)
+
+      handle = renderTimeline(
+        project,
+        small,
+        {
+          outputPath: target,
+          crf: 28,
+          preset: 'veryfast',
+          encoder,
+          startFrame: chunk.startFrame,
+          endFrame: chunk.endFrame,
+          // A preview is a stand-in by definition, so it reads stand-ins.
+          useProxies: true,
+        },
+        (progress) =>
+          onProgress?.({
+            ...progress,
+            frame: done + progress.frame,
+            totalFrames: totalDirtyFrames,
+          }),
+      )
+      await handle.promise
+      done += chunk.endFrame - chunk.startFrame
     }
 
-    handle = renderTimeline(
-      project,
-      previewTimeline,
-      {
-        outputPath: path,
-        crf: 28,
-        preset: 'veryfast',
-        startFrame,
-        endFrame,
-        // A preview is a stand-in by definition, so it reads stand-ins.
-        useProxies: true,
-      },
-      onProgress,
+    // Stitching is a stream copy: the slices were all encoded with the same
+    // settings at the same size, so nothing is decoded again here.
+    const list = join(chunkDir(cacheDir), `list-${plan.fingerprint}.txt`)
+    await writeFile(
+      list,
+      plan.chunks.map((chunk) => `file '${chunkPath(cacheDir, chunk).replace(/'/g, "'\\''")}'`).join('\n'),
+      'utf8',
     )
-    await handle.promise
-    await pruneOldPreviews(cacheDir, fingerprint)
+    await concatFiles(list, path)
+    await unlink(list).catch(() => {})
+
+    await prune(cacheDir, plan)
     return state
   })()
 
-  return { promise, cancel: () => handle?.cancel() }
+  return {
+    promise,
+    cancel: () => {
+      cancelled = true
+      handle?.cancel()
+    },
+  }
 }
 
-/** Keeps the cache from growing without bound as the edit evolves. */
-async function pruneOldPreviews(cacheDir: string, keepFingerprint: string): Promise<void> {
+/** Keeps the cache bounded without throwing away slices this plan still wants. */
+async function prune(cacheDir: string, plan: PreviewPlan): Promise<void> {
+  const keep = new Set(plan.chunks.map((chunk) => `chunk-${chunk.fingerprint}.mp4`))
+  await pruneDirectory(cacheDir, (name) => name.startsWith('preview-') && name.endsWith('.mp4'), KEEP_PREVIEWS, new Set([`preview-${plan.fingerprint}.mp4`]))
+  await pruneDirectory(chunkDir(cacheDir), (name) => name.startsWith('chunk-'), KEEP_CHUNKS, keep)
+}
+
+async function pruneDirectory(
+  directory: string,
+  matches: (name: string) => boolean,
+  limit: number,
+  keep: Set<string>,
+): Promise<void> {
   try {
-    const entries = await readdir(cacheDir)
-    const proxies = entries.filter((name) => name.startsWith('preview-') && name.endsWith('.mp4'))
-    if (proxies.length <= KEEP_PROXIES) return
+    const entries = (await readdir(directory)).filter(matches)
+    if (entries.length <= limit) return
 
     const dated = await Promise.all(
-      proxies.map(async (name) => ({
-        name,
-        mtime: (await stat(join(cacheDir, name))).mtimeMs,
-      })),
+      entries.map(async (name) => ({ name, mtime: (await stat(join(directory, name))).mtimeMs })),
     )
     dated.sort((a, b) => b.mtime - a.mtime)
-    for (const entry of dated.slice(KEEP_PROXIES)) {
-      if (entry.name.includes(keepFingerprint)) continue
-      await unlink(join(cacheDir, entry.name)).catch(() => {})
+    for (const entry of dated.slice(limit)) {
+      if (keep.has(entry.name)) continue
+      await unlink(join(directory, entry.name)).catch(() => {})
     }
   } catch {
     // Pruning is housekeeping; failing at it must not fail the render.
