@@ -33,20 +33,22 @@ Fait et vérifié :
 - Import vidéo = image + son en clips liés
 - Glisser-déposer depuis l'explorateur
 - Double moniteur clip / projet, mixeur audio en dB
-- Barre de menus native, 48 outils MCP, bouton de connexion en un clic
+- Barre de menus native, 53 outils MCP, bouton de connexion en un clic
 - Logo intégré : `.ico` multi-tailles dans l'exe, `.png` Linux
 - Keyframes : domaine, rendu, éditeur, MCP
 - Agent intégré + journal d'actions annulables une par une
 - Sous-titres SRT/VTT, étalonnage courbes + roues, proxys, multicam
 - CI + release automatique sur tag, mise à jour dans l'app
 - Preview incrémentale par tranches, encodage GPU quand disponible
-- 359 tests verts ; exe Windows signé non, mais construit et livré
+- Performances : tranches en parallèle, basse priorité, cache borné, preview
+  au repos, réglages dans l'UI **et** en MCP
+- 403 tests verts ; exe Windows signé non, mais construit et livré
 
 ---
 
 ## À FAIRE
 
-Les six blocs sont faits. **Un seul point reste ouvert et il n'est pas
+Les sept blocs sont faits. **Un seul point reste ouvert et il n'est pas
 technique** : la signature du code Windows demande un certificat Authenticode
 (~300 €/an), donc c'est une décision d'achat. Tout le reste tourne, est testé,
 et est poussé.
@@ -210,9 +212,85 @@ avec un transport bouchonné, mais aucune requête n'a été envoyée pour de vr
       ~300 €/an en OV, davantage en EV. Sans lui SmartScreen avertit au
       premier lancement. C'est une décision de Simon, pas un travail à faire.
 
+### Bloc 7 — Performances  ✅ (24/09/2026)
+
+Tout passe par un seul propriétaire, `src/main/media/host.ts` : l'UI et les
+outils MCP appellent le même code, donc « construire la preview » veut dire la
+même chose quel que soit le demandeur, et deux demandeurs ne lancent jamais deux
+rendus du même montage.
+
+- [x] **Son des tranches corrigé** — voir la décision du 24/09 : plus de clic
+      aux jonctions, plus de dérive. Tranches en `.mov` avec PCM, AAC encodé une
+      seule fois au collage. Mesuré au sinus pur dans `tests/preview-audio.test.ts`
+- [x] **Clé de tranche honnête** : taille + mtime du fichier source (un
+      réexport sous le même nom servait l'ancienne image) et **profil de rendu**
+      (encodeur, hauteur, qualité, format) — une tranche NVENC et une x264 ne
+      se recollent jamais
+- [x] **Écritures atomiques** partout (tranches, previews, proxys, images) :
+      fichier `.part-…` puis renommage. Un crash ou une coupure ne laisse plus
+      rien qui ait l'air fini. Les partiels orphelins sont balayés après 30 min
+- [x] **Tranches en parallèle** : mesuré sur 4 cœurs, 6 tranches 1080p :
+      1 à la fois 6,1 s → 2 : 5,0 s → 3 : 4,9 s. Défaut = moitié des cœurs,
+      plafonné à 3 (et à 3 sessions pour un encodeur GPU)
+- [x] **Basse priorité** pour preview et proxys (vérifié : `nice 10`)
+- [x] **Proxys** en parallèle, `-tune fastdecode`, et le trou `existsSync`
+      bouché aussi chez eux
+- [x] **Cache des images du moniteur**, indexé comme les tranches : un
+      aller-retour au scrub ne rend chaque image qu'une fois ; une requête plus
+      récente **annule** celle qui traîne encore. JPEG au lieu de PNG
+- [x] **Cache borné** : plafond en Go, éviction du moins récemment **utilisé**
+      (les tranches réutilisées sont re-datées), jamais les proxys
+- [x] **Preview au repos** (désactivée par défaut, comme Kdenlive) : après
+      2,5 s sans édition, les tranches sales s'encodent en fond ; la prochaine
+      édition l'annule sans perdre les tranches finies ; une demande explicite
+      prend la main au lieu d'être refusée
+- [x] **Décodage GPU** optionnel, **sondé** : sur une machine sans GPU,
+      `-hwaccel auto` fait *planter* FFmpeg (assertion libva), il ne se replie
+      pas. Refusé avec la raison quand la sonde échoue
+- [x] **Chien de garde** : un rendu muet depuis 2 min est tué avec un message
+- [x] **Export MCP sur GPU** comme la boîte de dialogue — l'outil avait gardé
+      sa propre table de qualités et restait sur le CPU. Table unique dans
+      `media/export.ts`
+- [x] **UI** : `Settings ▸ Performance and cached data…` — résolution de
+      preview, encodes simultanés, priorité, décodage GPU, preview au repos,
+      plafond, et l'usage du cache par type avec suppression. Le moniteur dit
+      « Rendering in the background » et la vitesse d'encodage
+- [x] **MCP** : `get_performance`, `set_performance` (toutes les valeurs
+      invalides nommées d'un coup), `render_preview` (tranches encodées vs
+      réutilisées), `get_cache`, `clear_cache` — 53 outils
+
+Non vérifié ici : le gain réel du décodage GPU et le plafond de sessions NVENC,
+faute de GPU sur msi. La sonde garantit seulement qu'on ne l'active pas là où il
+casse.
+
 ---
 
 ## Décisions prises
+
+- **24/09/2026 — Le son de la preview dérivait d'une tranche à l'autre.**
+  Mesuré sur un sinus de 441 Hz, 3 tranches : clic à 4,021 s et 8,053 s, et
+  12,085 s de son sous 12 s d'image. Chaque flux AAC commence par un délai
+  d'encodeur ; recollés en copie, ils l'empilaient à chaque jonction (~25 ms),
+  soit ~4 s de désynchro au bout d'un montage de 10 min. Trois défauts de plus
+  trouvés en creusant, tous corrigés :
+  1. une tranche **sans aucun son** n'avait pas de piste audio, et le demuxer
+     décalait tout ce qui suivait ; une tranche mono ne se recollait pas à une
+     stéréo → piste toujours présente, toujours 48 kHz stéréo ;
+  2. `alimiter` **retarde le son de 5 ms** par défaut (`latency=0`) — un
+     glissement sous l'image à l'export aussi — et **remonte le mix de
+     +0,2 dB** (`level=1`, mesuré). Désormais `level=0:latency=1` ;
+  3. `adelay` en millisecondes arrondissait différemment dans chaque tranche →
+     en échantillons (`S`).
+- **24/09/2026 — Un `apad` sans borne bloquait FFmpeg une fois sur dix.**
+  Devant le limiteur, il envoyait FFmpeg dans une boucle à 100 % CPU qui ne
+  finissait jamais — trouvé parce que les tests expirés laissaient des FFmpeg
+  tourner vingt minutes. Mesuré : 1 blocage sur 10 avec `apad`, 0 sur 40 avec
+  `apad=whole_dur`. D'où aussi le chien de garde : un rendu qui ne rapporte
+  plus rien n'est pas lent, il est coincé.
+- **24/09/2026 — Deux rendus du même montage pouvaient partir ensemble.**
+  Le test « refuse un second rendu » l'a montré : la vérification précédait un
+  `await`, et l'élagage des previews supprimait le fichier partiel de l'autre
+  rendu. Le créneau est pris avant tout `await`, l'élagage ignore les partiels.
 
 - **22/09/2026 — « media error 4 » n'était pas un bug de lecture.**
   Deux défauts, tous deux à moi, qui donnaient le même symptôme :

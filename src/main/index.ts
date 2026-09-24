@@ -8,12 +8,15 @@ import { existsSync } from 'node:fs'
 import { activeTimeline, timelineTotalFrames, type MediaAsset, type Project } from '../core/model.js'
 import * as ops from '../core/ops.js'
 import { OpError, type Receipt } from '../core/ops.js'
-import { FFmpegError, ffmpegVersion, generateThumbnail, probeAsset, renderAssetFrame, renderFrame, renderTimeline, type RenderHandle } from './media/ffmpeg.js'
+import { FFmpegError, ffmpegVersion, generateThumbnail, probeAsset, renderTimeline, type RenderHandle } from './media/ffmpeg.js'
 import { buildMenu } from './menu.js'
-import { existingPreview, fingerprintTimeline, renderPreview, type PreviewJob } from './media/preview.js'
-import { buildProxies, canProxy, existingProxy, PROXY_WIDTH, type ProxyJob } from './media/proxy.js'
+import { media, MediaHost } from './media/host.js'
+import { exportSetup, type ExportQuality } from './media/export.js'
+import { getPerformance, loadPerformance, setPerformance, PREVIEW_HEIGHTS, MAX_PARALLEL_JOBS, defaultParallelJobs, type PerformanceSettings } from './media/performance.js'
+import { CACHE_CATEGORIES, type CacheCategory } from './media/cache.js'
 import { CONFIDENT, syncByAudio, SyncError } from './media/sync.js'
-import { bestEncoder, SOFTWARE, toSpec } from './media/encoders.js'
+import { bestEncoder, hardwareDecodeWorks } from './media/encoders.js'
+import { cpus } from 'node:os'
 import { checkForUpdate, downloadUpdate, initUpdater, installUpdate, updateState } from './updater.js'
 import { MCPServer, DEFAULT_MCP_PORT } from './mcp/server.js'
 import { TOOLS_BY_NAME } from './mcp/tools.js'
@@ -52,7 +55,6 @@ let mcpStatus: { running: boolean; endpoint: string | null; error: string | null
 }
 let window: BrowserWindow | null = null
 let activeExport: RenderHandle | null = null
-let activePreview: PreviewJob | null = null
 
 // --- Window ---------------------------------------------------------------
 
@@ -424,56 +426,17 @@ handle('multicam:sync', async (assetIds: string[]) => {
 
 // --- Proxies --------------------------------------------------------------
 
-let activeProxyJob: ProxyJob | null = null
-
-handle('proxies:state', async () => {
-  const cacheDir = cacheDirFor(store.project.path)
-  const videos = store.project.assets.filter(canProxy)
-  const withProxy = await Promise.all(videos.map((asset) => existingProxy(asset, cacheDir)))
-  return {
-    total: videos.length,
-    ready: withProxy.filter(Boolean).length,
-    building: activeProxyJob !== null,
-    width: PROXY_WIDTH,
-  }
-})
+handle('proxies:state', () => media.proxyState(store.project))
 
 handle('proxies:build', async () => {
-  if (activeProxyJob) throw new OpError('refused', 'Proxies are already being built.')
-  const cacheDir = cacheDirFor(store.project.path)
-  const assets = store.project.assets.filter(canProxy)
-  if (assets.length === 0) {
-    throw new OpError('refused', 'This project has no video clip to proxy.')
-  }
-
-  const job = buildProxies(assets, cacheDir, (progress) =>
-    window?.webContents.send('proxies:progress', progress),
+  const { built, receipt } = await media.buildProxies(store, (args) =>
+    store.apply((p) => ops.setAssetProxies(p, args), { source: 'ui', name: 'setAssetProxies', args }),
   )
-  activeProxyJob = job
-  try {
-    const updated = await job.promise
-    if (updated.length === 0) {
-      return { built: 0, message: 'Every clip already had a current proxy' }
-    }
-    const args = {
-      proxies: updated.map((asset) => ({ assetId: asset.id, proxyPath: asset.proxyPath ?? null })),
-    }
-    const receipt = store.apply((p) => ops.setAssetProxies(p, args), {
-      source: 'ui',
-      name: 'setAssetProxies',
-      args,
-    })
-    return { built: updated.length, message: receipt.summary }
-  } finally {
-    activeProxyJob = null
-    window?.webContents.send('proxies:done')
-  }
+  if (!receipt) return { built: 0, message: 'Every clip already had a current proxy' }
+  return { built, message: receipt.summary }
 })
 
-handle('proxies:cancel', () => {
-  activeProxyJob?.cancel()
-  return { cancelled: activeProxyJob !== null }
-})
+handle('proxies:cancel', () => ({ cancelled: media.cancelProxies() }))
 
 /** Drops the proxy paths so the editor reads originals again. Files stay cached. */
 handle('proxies:clear', () => {
@@ -602,76 +565,30 @@ handle('media:readImage', async (path: string) => {
 
 handle('render:frame', async (frame: number) => {
   const project = store.project
-  const timeline = activeTimeline(project)
-  const output = join(cacheDirFor(project.path), `preview-${timeline.id}-${frame}.png`)
-  await renderFrame(project, timeline, frame, output)
-  const data = await readFile(output)
-  return `data:image/png;base64,${data.toString('base64')}`
+  const { path } = await media.timelineFrame(project, activeTimeline(project), frame)
+  const data = await readFile(path)
+  return `data:image/jpeg;base64,${data.toString('base64')}`
 })
 
 handle('render:assetFrame', async (args: { assetId: string; seconds: number }) => {
-  const asset = store.project.assets.find((a) => a.id === args.assetId)
-  if (!asset) throw new OpError('not_found', `media asset ${args.assetId} is not in this project`)
-  const output = join(cacheDirFor(store.project.path), `clip-${asset.id}-${Math.round(args.seconds * 1000)}.jpg`)
-  await renderAssetFrame(asset, args.seconds, output)
-  const data = await readFile(output)
+  const { path } = await media.assetFrame(store.project, args.assetId, args.seconds)
+  const data = await readFile(path)
   return `data:image/jpeg;base64,${data.toString('base64')}`
 })
 
 /** Current proxy state, so the UI knows whether playback is possible and fresh. */
 handle('preview:state', () => {
   const project = store.project
-  const timeline = activeTimeline(project)
-  const existing = existingPreview(project, timeline, cacheDirFor(project.path))
-  return {
-    fingerprint: fingerprintTimeline(project, timeline),
-    ready: existing !== null,
-    rendering: activePreview !== null,
-    ...(existing
-      ? {
-          url: `preview://local/${basename(existing.path)}`,
-          startFrame: existing.startFrame,
-          totalFrames: existing.totalFrames,
-          fps: existing.fps,
-        }
-      : {}),
-  }
+  return media.previewState(project, activeTimeline(project))
 })
 
 handle('preview:render', async () => {
-  if (activePreview) throw new OpError('refused', 'a preview render is already running')
   const project = store.project
-  const timeline = activeTimeline(project)
-  if (timelineTotalFrames(timeline) === 0) {
-    throw new OpError('refused', 'the timeline is empty; there is nothing to preview')
-  }
-
-  const job = renderPreview(project, timeline, cacheDirFor(project.path), (progress) => {
-    window?.webContents.send('preview:progress', progress)
-  })
-  activePreview = job
-  try {
-    const state = await job.promise
-    return {
-      ready: true,
-      rendering: false,
-      fingerprint: state.fingerprint,
-      url: `preview://local/${basename(state.path)}`,
-      startFrame: state.startFrame,
-      totalFrames: state.totalFrames,
-      fps: state.fps,
-    }
-  } finally {
-    activePreview = null
-    window?.webContents.send('preview:done')
-  }
+  const state = await media.renderPreview(project, activeTimeline(project))
+  return MediaHost.info(state)
 })
 
-handle('preview:cancel', () => {
-  if (!activePreview) return { cancelled: false }
-  activePreview.cancel()
-  return { cancelled: true }
-})
+handle('preview:cancel', () => ({ cancelled: media.cancelPreview() }))
 
 handle('render:export', async (args: {
   outputPath?: string
@@ -693,31 +610,17 @@ handle('render:export', async (args: {
     outputPath = picked.filePath
   }
 
-  const quality = args?.quality ?? 'balanced'
-  const settings = {
-    draft: { crf: 28, preset: 'veryfast' as const },
-    balanced: { crf: 20, preset: 'medium' as const },
-    high: { crf: 16, preset: 'slow' as const },
-  }[quality]
-
-  /*
-   * Hardware by default, because the wait is what people actually feel.
-   *
-   * At the same target a GPU encoder gives up some efficiency against x264 on a
-   * slow preset — a slightly larger file for the same picture. It is many times
-   * faster, and it can be turned off per export when the size matters more.
-   */
-  const chosen = args?.hardware === false ? SOFTWARE : await bestEncoder()
+  const setup = await exportSetup((args?.quality ?? 'balanced') as ExportQuality, args?.hardware !== false)
   const handleRender = renderTimeline(
     project,
     timeline,
-    { outputPath, ...settings, encoder: toSpec(chosen, settings.crf) },
+    { outputPath, ...setup.options },
     (progress) => window?.webContents.send('render:progress', progress),
   )
   activeExport = handleRender
   try {
-    await handleRender.promise
-    return { cancelled: false, outputPath, encoder: chosen.label }
+    await media.trackExport(handleRender.promise)
+    return { cancelled: false, outputPath, encoder: setup.encoder.label }
   } finally {
     activeExport = null
   }
@@ -742,6 +645,44 @@ handle('shell:reveal', (path: string) => {
 handle('system:encoder', async () => {
   const encoder = await bestEncoder()
   return { name: encoder.name, label: encoder.label, hardware: encoder.hardware }
+})
+
+// --- Performance and cache -------------------------------------------------
+
+async function performanceSnapshot() {
+  const encoder = await bestEncoder()
+  return {
+    settings: getPerformance(),
+    options: { previewHeights: PREVIEW_HEIGHTS, maxParallelJobs: MAX_PARALLEL_JOBS },
+    machine: {
+      logicalCores: cpus().length,
+      recommendedParallelJobs: defaultParallelJobs(),
+      encoder: encoder.label,
+      hardwareEncoder: encoder.hardware,
+      hardwareDecodeAvailable: await hardwareDecodeWorks(),
+    },
+    cache: await media.usage(store.project),
+  }
+}
+
+handle('performance:get', () => performanceSnapshot())
+
+handle('performance:set', async (update: Partial<PerformanceSettings>) => {
+  if (update.hardwareDecode && !(await hardwareDecodeWorks())) {
+    throw new OpError('refused', 'No hardware decoder works on this machine, so it stays off.')
+  }
+  await setPerformance(update)
+  media.editHappened()
+  return performanceSnapshot()
+})
+
+handle('cache:clear', async (categories: CacheCategory[]) => {
+  const wanted = categories.filter((c) => CACHE_CATEGORIES.includes(c))
+  if (wanted.length === 0) throw new OpError('invalid_argument', 'choose at least one kind of cached data')
+  const result = await media.clearCache(store, wanted, (args) =>
+    store.apply((p) => ops.setAssetProxies(p, args), { source: 'ui', name: 'setAssetProxies', args }),
+  )
+  return { ...(await performanceSnapshot()), freed: { files: result.files, bytes: result.bytes } }
 })
 
 handle('system:info', async () => ({
@@ -800,6 +741,12 @@ function registerFontProtocol(): void {
 }
 
 app.whenReady().then(async () => {
+  await loadPerformance(join(app.getPath('userData'), 'performance.json'))
+  media.attach(store)
+  media.on('preview:progress', (progress) => window?.webContents.send('preview:progress', progress))
+  media.on('preview:done', () => window?.webContents.send('preview:done'))
+  media.on('proxies:progress', (progress) => window?.webContents.send('proxies:progress', progress))
+  media.on('proxies:done', () => window?.webContents.send('proxies:done'))
   registerFontProtocol()
   createWindow()
   initUpdater((update) => window?.webContents.send('update:state', update))
@@ -820,6 +767,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   activeExport?.cancel()
-  activePreview?.cancel()
+  media.cancelPreview()
+  media.cancelProxies()
   void mcp?.stop()
 })

@@ -18,12 +18,13 @@
 
 import { createHash } from 'node:crypto'
 import { mkdir, stat, unlink } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { statSync } from 'node:fs'
 import { join } from 'node:path'
 
 import type { MediaAsset } from '../../core/model.js'
-import { FFMPEG_PATH, FFmpegError } from './ffmpeg.js'
+import { commitPartial, FFMPEG_PATH, FFmpegError, lowerPriority, partialPath } from './ffmpeg.js'
 import { spawn } from 'node:child_process'
+import { runPool } from './pool.js'
 
 /** Long edge of a proxy, in pixels. Small enough to be cheap, big enough to cut on. */
 export const PROXY_WIDTH = 640
@@ -72,28 +73,61 @@ export async function proxyPathFor(asset: MediaAsset, cacheDir: string): Promise
   return join(proxyDirFor(cacheDir), `${await fingerprint(asset)}.mp4`)
 }
 
+/**
+ * A proxy counts only if it holds something — the same rule the preview cache
+ * learned the hard way. `existsSync` took an empty file left by a killed
+ * transcode for a finished proxy, and the editor then cut on nothing.
+ */
+function usable(path: string): boolean {
+  try {
+    return statSync(path).size > 0
+  } catch {
+    return false
+  }
+}
+
 /** The proxy for this asset if one is already on disk and current. */
 export async function existingProxy(asset: MediaAsset, cacheDir: string): Promise<string | null> {
   if (!canProxy(asset)) return null
   const path = await proxyPathFor(asset, cacheDir)
-  return existsSync(path) ? path : null
+  return usable(path) ? path : null
 }
 
-function transcode(asset: MediaAsset, outputPath: string, signal: AbortSignal): Promise<void> {
+export interface ProxyOptions {
+  /** Transcodes run at the same time. */
+  jobs?: number
+  /** Run below normal priority, so the editor stays responsive meanwhile. */
+  background?: boolean
+}
+
+/** The FFmpeg arguments for one proxy. Exported so tests can read them. */
+export function proxyArgs(asset: MediaAsset, outputPath: string): string[] {
   // `-g 1` is the whole point: every frame a keyframe, so a seek costs one
-  // frame of decoding instead of rewinding to the last I-frame.
-  const args = [
+  // frame of decoding instead of rewinding to the last I-frame. `fastdecode`
+  // drops the CABAC and deblocking work the decoder would otherwise redo on
+  // every one of those frames.
+  return [
     '-hide_banner', '-nostdin', '-y',
     '-i', asset.path,
     '-vf', `scale=${PROXY_WIDTH}:-2:flags=fast_bilinear`,
-    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '26', '-g', '1',
+    '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'fastdecode', '-crf', '26', '-g', '1',
     '-pix_fmt', 'yuv420p',
     ...(asset.hasAudio ? ['-c:a', 'aac', '-b:a', '128k'] : ['-an']),
     outputPath,
   ]
+}
+
+function transcode(
+  asset: MediaAsset,
+  outputPath: string,
+  signal: AbortSignal,
+  background: boolean,
+): Promise<void> {
+  const args = proxyArgs(asset, outputPath)
 
   return new Promise((resolve, reject) => {
     const child = spawn(FFMPEG_PATH, args, { windowsHide: true })
+    if (background) lowerPriority(child.pid)
     let stderr = ''
     const abort = () => child.kill('SIGKILL')
     signal.addEventListener('abort', abort)
@@ -125,6 +159,11 @@ export interface ProxyProgress {
 /**
  * Builds proxies for the given assets, skipping ones already cached.
  *
+ * Several at once when the settings allow it — a card dump of forty clips is
+ * exactly when proxies are wanted, and one transcode at a time leaves most of
+ * the machine idle. Each one is written beside its final name and renamed when
+ * complete, so a crash never leaves a truncated proxy that looks finished.
+ *
  * Returns the assets that gained a proxy, so the caller can write the paths
  * into the project in a single operation rather than one per file.
  */
@@ -132,6 +171,7 @@ export function buildProxies(
   assets: MediaAsset[],
   cacheDir: string,
   onProgress?: (progress: ProxyProgress) => void,
+  options: ProxyOptions = {},
 ): ProxyJob {
   const controller = new AbortController()
 
@@ -139,29 +179,34 @@ export function buildProxies(
     const targets = assets.filter(canProxy)
     const updated: MediaAsset[] = []
     await mkdir(proxyDirFor(cacheDir), { recursive: true })
+    let done = 0
 
-    for (const [index, asset] of targets.entries()) {
-      if (controller.signal.aborted) break
-      onProgress?.({ assetId: asset.id, name: asset.name, done: index, total: targets.length })
+    await runPool(targets, options.jobs ?? 1, async (asset) => {
+      if (controller.signal.aborted) return
+      onProgress?.({ assetId: asset.id, name: asset.name, done, total: targets.length })
 
       const path = await proxyPathFor(asset, cacheDir)
-      if (existsSync(path)) {
+      if (usable(path)) {
         if (asset.proxyPath !== path) updated.push({ ...asset, proxyPath: path })
-        continue
+        done++
+        return
       }
+      const partial = partialPath(path)
       try {
-        await transcode(asset, path, controller.signal)
+        await transcode(asset, partial, controller.signal, options.background ?? false)
+        await commitPartial(partial, path)
         updated.push({ ...asset, proxyPath: path })
+        done++
       } catch (error) {
-        // A half-written file would be picked up as a valid cache entry.
-        await unlink(path).catch(() => {})
-        if (controller.signal.aborted) break
+        await unlink(partial).catch(() => {})
+        if (controller.signal.aborted) return
         throw error
       }
-    }
+    })
 
     onProgress?.({ assetId: '', name: '', done: targets.length, total: targets.length })
-    return updated
+    // Same order as the input, whatever order the lanes finished in.
+    return targets.flatMap((asset) => updated.filter((u) => u.id === asset.id))
   })()
 
   return { promise, cancel: () => controller.abort() }

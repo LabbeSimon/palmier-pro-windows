@@ -177,7 +177,9 @@ export function ProjectMonitor(props: Props) {
           ) : player.rendering ? (
             <>
               <span className="building">
-                Building the preview{player.progress ? ` — frame ${player.progress.frame} of ${player.progress.totalFrames}` : ''}
+                {player.info?.background ? 'Rendering in the background' : 'Building the preview'}
+                {player.progress ? ` — frame ${player.progress.frame} of ${player.progress.totalFrames}` : ''}
+                {player.progress?.speed ? ` · ${player.progress.speed}` : ''}
               </span>
               <button onClick={props.onCancelRender}>Cancel</button>
             </>

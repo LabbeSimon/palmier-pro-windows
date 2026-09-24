@@ -24,10 +24,44 @@ export interface PreviewInfo {
   fingerprint: string
   ready: boolean
   rendering: boolean
+  /** True when the running render was started by the idle scheduler. */
+  background?: boolean
   url?: string
   startFrame?: number
   totalFrames?: number
   fps?: number
+  width?: number
+  height?: number
+  encoder?: string
+}
+
+export type CacheCategory = 'preview' | 'frames' | 'proxies' | 'thumbnails'
+
+export interface PerformanceSettings {
+  previewHeight: number
+  parallelJobs: number
+  lowPriority: boolean
+  hardwareDecode: boolean
+  autoPreview: boolean
+  cacheLimitGB: number
+}
+
+export interface PerformanceSnapshot {
+  settings: PerformanceSettings
+  options: { previewHeights: readonly number[]; maxParallelJobs: number }
+  machine: {
+    logicalCores: number
+    recommendedParallelJobs: number
+    encoder: string
+    hardwareEncoder: boolean
+    hardwareDecodeAvailable: boolean
+  }
+  cache: {
+    directory: string
+    totalBytes: number
+    categories: Record<CacheCategory, { files: number; bytes: number }>
+  }
+  freed?: { files: number; bytes: number }
 }
 
 export interface RenderProgress {
@@ -165,6 +199,11 @@ const api = {
     cancel: () => invoke<{ cancelled: boolean }>('preview:cancel'),
     onProgress: (listener: (progress: RenderProgress) => void) => subscribe('preview:progress', listener),
     onDone: (listener: () => void) => subscribe('preview:done', listener),
+  },
+  performance: {
+    get: () => invoke<PerformanceSnapshot>('performance:get'),
+    set: (update: Partial<PerformanceSettings>) => invoke<PerformanceSnapshot>('performance:set', update),
+    clearCache: (categories: CacheCategory[]) => invoke<PerformanceSnapshot>('cache:clear', categories),
   },
   files: {
     /**

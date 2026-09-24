@@ -2092,3 +2092,207 @@ input[type='range']:hover::-webkit-slider-thumb {
 /* The GPU doing the encoding is worth noticing; the CPU doing it is worth
    noticing for the opposite reason. */
 .proxy-note.hardware { color: var(--ok); }
+
+/* --- Modal dialogs — a KDE dialog: square, flat, header and button row. --- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.modal {
+  width: min(620px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+.modal > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.modal > header h2 {
+  margin: 0;
+  font-size: var(--fs-title);
+  font-weight: var(--fw-semibold);
+}
+
+.modal > header button.icon {
+  padding: 0 var(--space-2);
+  font-size: 16px;
+  line-height: 20px;
+  background: transparent;
+  border-color: transparent;
+}
+
+.modal .loading {
+  padding: var(--space-5);
+  color: var(--text-muted);
+}
+
+.modal-body {
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-4) var(--space-3);
+}
+
+.modal-body section + section {
+  border-top: 1px solid var(--border);
+}
+
+.modal-body h3 {
+  margin: var(--space-3) 0 var(--space-2);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-semibold);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.modal .setting {
+  display: grid;
+  grid-template-columns: 170px 96px 1fr;
+  align-items: center;
+  column-gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.modal .setting > label:not(.check) {
+  color: var(--text);
+  font-size: var(--fs-body);
+}
+
+.modal .setting > label.check {
+  grid-column: 1 / 3;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-2);
+  text-align: left;
+  font-size: var(--fs-body);
+}
+
+.modal .setting > label.check input {
+  flex: none;
+  width: auto;
+  margin: 0;
+}
+
+.modal .setting select,
+.modal .setting input[type='number'] {
+  justify-self: start;
+}
+
+.modal .setting input[type='number'] {
+  width: 64px;
+}
+
+.modal .setting .hint {
+  grid-column: 3;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+}
+
+.modal .setting > label.check + .hint {
+  grid-column: 3;
+}
+
+.modal .setting .readout {
+  font-size: var(--fs-body);
+  color: var(--text-muted);
+}
+
+.modal .setting .readout.hardware {
+  color: var(--ok);
+}
+
+.cache-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: var(--space-3);
+  font-size: var(--fs-body);
+}
+
+.cache-table td {
+  padding: var(--space-1) var(--space-1);
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.cache-table tbody tr:nth-child(odd) td {
+  background: var(--bg-track);
+}
+
+.cache-table .name {
+  display: block;
+}
+
+.cache-table .hint {
+  display: block;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+}
+
+.cache-table .size,
+.cache-table .count {
+  white-space: nowrap;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.cache-table td:last-child {
+  text-align: right;
+  width: 1%;
+}
+
+.cache-table tfoot td {
+  border-bottom: none;
+  font-weight: var(--fw-medium);
+}
+
+.cache-table .meter-cell {
+  padding-left: var(--space-3);
+}
+
+.meter {
+  height: 6px;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.meter .fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.modal .path {
+  margin: 0 0 var(--space-2);
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modal > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border);
+}

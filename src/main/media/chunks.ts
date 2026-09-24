@@ -12,6 +12,7 @@
  */
 
 import { createHash } from 'node:crypto'
+import { statSync } from 'node:fs'
 
 import { clipEndFrame, type Clip, type Project, type Timeline } from '../../core/model.js'
 
@@ -36,12 +37,53 @@ export function chunkFrames(fps: number): number {
   return Math.max(1, Math.round(fps * CHUNK_SECONDS))
 }
 
-/** Everything inside this slice that changes the picture or the sound. */
-function fingerprintRange(
+/**
+ * Size and modification time of a file on disk.
+ *
+ * Part of the key because the path alone lies: re-exporting a shot over the
+ * same name, with the same length, kept serving the old picture from cache.
+ * Remembered for a moment, since the UI asks for the plan on every edit and a
+ * stat per asset per slice adds up on a long timeline.
+ */
+const stamps = new Map<string, { stamp: string; at: number }>()
+const STAMP_TTL_MS = 1500
+
+export function fileStamp(path: string): string {
+  const now = Date.now()
+  const known = stamps.get(path)
+  if (known && now - known.at < STAMP_TTL_MS) return known.stamp
+  let stamp = 'missing'
+  try {
+    const info = statSync(path)
+    stamp = `${info.size}:${Math.round(info.mtimeMs)}`
+  } catch {
+    // A missing file keys differently from any real one, and a file that
+    // comes back later gets a fresh key.
+  }
+  stamps.set(path, { stamp, at: now })
+  return stamp
+}
+
+/** Forgets remembered stamps. Tests that rewrite a file use it. */
+export function forgetFileStamps(): void {
+  stamps.clear()
+}
+
+/**
+ * Everything inside this range that changes the picture or the sound.
+ *
+ * `profile` names how the range is rendered — encoder, size, format. Two
+ * slices of the same edit made by different encoders are different files: an
+ * NVENC slice and an x264 slice may not even join, so they must never share a
+ * key. It is exported for the monitor's frame cache, which keys single frames
+ * the same way.
+ */
+export function fingerprintRange(
   project: Project,
   timeline: Timeline,
   startFrame: number,
   endFrame: number,
+  profile = '',
 ): string {
   const overlapping = (clip: Clip): boolean => {
     // A transition pulls the incoming clip back over its predecessor, so its
@@ -63,6 +105,7 @@ function fingerprintRange(
     .filter((entry) => entry.clips.length > 0)
 
   const relevant = {
+    profile,
     fps: timeline.fps,
     width: timeline.width,
     height: timeline.height,
@@ -85,7 +128,10 @@ function fingerprintRange(
       .map((id) => {
         const asset = project.assets.find((a) => a.id === id)
         // The proxy path counts: switching a clip to its proxy changes the picture.
-        return asset ? `${asset.path}:${asset.durationSeconds}:${asset.proxyPath ?? ''}` : id
+        // The stamps count too: a file replaced on disk is a different picture.
+        if (!asset) return id
+        const proxy = asset.proxyPath ? `${asset.proxyPath}@${fileStamp(asset.proxyPath)}` : ''
+        return `${asset.path}@${fileStamp(asset.path)}:${asset.durationSeconds}:${proxy}`
       }),
   }
   return createHash('sha1').update(JSON.stringify(relevant)).digest('hex').slice(0, 16)
@@ -103,6 +149,7 @@ export function planChunks(
   timeline: Timeline,
   startFrame: number,
   endFrame: number,
+  profile = '',
 ): Chunk[] {
   const size = chunkFrames(timeline.fps)
   const first = Math.floor(Math.max(0, startFrame) / size)
@@ -116,7 +163,7 @@ export function planChunks(
       index,
       startFrame: from,
       endFrame: to,
-      fingerprint: fingerprintRange(project, timeline, from, to),
+      fingerprint: fingerprintRange(project, timeline, from, to, profile),
     })
   }
   return chunks

@@ -59,9 +59,14 @@ licence: TypeScript, Electron and FFmpeg, written from scratch.
   shows the composited edit.
 - **Native menu** with real accelerators; every item routes to the same handler the UI
   buttons use, so there is no second implementation to drift.
-- **MCP server** on `http://127.0.0.1:19789/mcp`, 48 tools, bound to loopback only.
+- **MCP server** on `http://127.0.0.1:19789/mcp`, 53 tools, bound to loopback only.
+- **Performance and cached data** (Settings menu, and the same knobs over MCP) — preview
+  resolution, simultaneous encodes, low-priority background encoding, GPU decoding when the
+  probe says it works, an optional idle preview that renders changed slices after a pause in
+  editing, and a cache ceiling with least-recently-used eviction. Proxies are never evicted
+  behind your back.
 - **Export** — H.264 / AAC MP4 with live progress and cancellation.
-- **Built-in agent** — a conversation panel that edits through the same 48 tools the MCP
+- **Built-in agent** — a conversation panel that edits through the same 53 tools the MCP
   server exposes, so its work lands on the same undo stack as yours. Needs your own Anthropic
   API key, which is encrypted with the OS keystore.
 - **Action journal** — every edit with its source (you, the built-in agent, or an MCP client),
@@ -89,7 +94,11 @@ src/main/      Electron main process.
   media/sync.ts     Multicam sync: loudness-envelope correlation, with a confidence.
   media/speech.ts   Voice activity: where a take carries sound, for timing captions.
   media/chunks.ts   Preview slicing: which four seconds of the edit actually changed.
-  media/encoders.ts Encoder selection, probed rather than assumed.
+  media/encoders.ts Encoder selection, probed rather than assumed; GPU decoding probed the same way.
+  media/host.ts     The one owner of background media work, shared by the UI and the MCP tools.
+  media/cache.ts    Cache usage per kind, purge, and least-recently-used eviction under a ceiling.
+  media/frames.ts   Monitor frames cached by what is in them, so a scrub renders each frame once.
+  media/performance.ts  Machine settings: preview size, parallel encodes, priority, idle preview.
   mcp/server.ts     JSON-RPC 2.0 over Streamable HTTP.
   mcp/tools.ts      The tool surface.
   agent/            The built-in agent: Anthropic client, tool loop, key storage.
