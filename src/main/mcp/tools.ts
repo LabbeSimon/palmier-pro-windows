@@ -30,13 +30,26 @@ import { TRANSITION_KINDS } from '../../core/model.js'
 import { OpError, type Receipt } from '../../core/ops.js'
 import { framesToTimecode } from '../../core/timecode.js'
 import { probeAsset, renderFrame, renderTimeline } from '../media/ffmpeg.js'
-import { buildProxies, canProxy, PROXY_WIDTH } from '../media/proxy.js'
+import { PROXY_WIDTH } from '../media/proxy.js'
+import { media } from '../media/host.js'
+import { exportSetup, EXPORT_QUALITIES, type ExportQuality } from '../media/export.js'
+import {
+  defaultParallelJobs,
+  getPerformance,
+  MAX_PARALLEL_JOBS,
+  PREVIEW_HEIGHTS,
+  setPerformance,
+  type PerformanceSettings,
+} from '../media/performance.js'
+import { CACHE_CATEGORIES, formatBytes, type CacheCategory } from '../media/cache.js'
+import { bestEncoder, hardwareDecodeWorks } from '../media/encoders.js'
+import { cpus } from 'node:os'
 import { CONFIDENT, syncByAudio, SyncError } from '../media/sync.js'
 import { detectSpeech, SpeechError } from '../media/speech.js'
 import { formatSrt, formatVtt, parseSubtitles } from '../../core/subtitles.js'
 import { framesToSeconds, secondsToFrames } from '../../core/timecode.js'
 import { readFile, writeFile } from 'node:fs/promises'
-import { cacheDirFor, ProjectStore } from '../project/store.js'
+import { ProjectStore } from '../project/store.js'
 
 export interface ToolContext {
   store: ProjectStore
@@ -996,24 +1009,15 @@ export const TOOLS: ToolDefinition[] = [
     description:
       'Transcode every video clip to a small all-intra copy, so editing and preview stay responsive on a modest ' +
       'machine. Proxies are used for preview only — an export always reads the original files, so this never ' +
-      'costs delivered quality. Already-current proxies are skipped.',
+      'costs delivered quality. Already-current proxies are skipped. Runs as many transcodes at once as the ' +
+      'parallelJobs setting allows (see get_performance).',
     inputSchema: object({}),
     handler: async (_args, ctx) => {
-      const project = ctx.store.project
-      const assets = project.assets.filter(canProxy)
-      if (assets.length === 0) {
-        throw new OpError('refused', 'this project has no video clip to proxy')
-      }
-      const updated = await buildProxies(assets, cacheDirFor(project.path)).promise
-      if (updated.length === 0) {
+      const { built, receipt } = await media.buildProxies(ctx.store, (proxyArgs) => ctx.store.apply((p) => ops.setAssetProxies(p, proxyArgs)))
+      if (!receipt) {
         return { built: 0, summary: 'every clip already had a current proxy', width: PROXY_WIDTH }
       }
-      const receipt = ctx.store.apply((p) =>
-        ops.setAssetProxies(p, {
-          proxies: updated.map((asset) => ({ assetId: asset.id, proxyPath: asset.proxyPath ?? null })),
-        }),
-      )
-      return receiptPayload(receipt, { built: updated.length, width: PROXY_WIDTH })
+      return receiptPayload(receipt, { built, width: PROXY_WIDTH })
     },
   },
   {
@@ -1305,12 +1309,14 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: 'export_project',
     description:
-      'Render the active timeline to an H.264 MP4 and wait for it to finish. Returns the output path, or a terminal ' +
+      'Render the active timeline to an H.264 MP4 and wait for it to finish. Uses the GPU encoder when the machine ' +
+      'has a working one, like the export dialog. Returns the output path and the encoder used, or a terminal ' +
       'error with the FFmpeg diagnostics — a failed export never reports success.',
     inputSchema: object({
       timeline_id: str('Defaults to the active timeline.'),
       output_path: str('Destination .mp4. Defaults to the project folder.'),
-      quality: { type: 'string', enum: ['draft', 'balanced', 'high'], description: 'Encoder preset. Default balanced.' },
+      quality: { type: 'string', enum: [...EXPORT_QUALITIES], description: 'Encoder preset. Default balanced.' },
+      hardware: bool('Use the GPU encoder when one works. Default true; false forces x264 on the CPU, which gives a slightly smaller file at the same quality and takes several times longer.'),
     }),
     handler: async (args, ctx) => {
       const project = ctx.store.project
@@ -1318,21 +1324,26 @@ export const TOOLS: ToolDefinition[] = [
       if (timelineTotalFrames(timeline) === 0) {
         throw new OpError('refused', `timeline "${timeline.name}" is empty; there is nothing to export`)
       }
-      const quality = (args.quality ?? 'balanced') as 'draft' | 'balanced' | 'high'
-      const encoder = {
-        draft: { crf: 28, preset: 'veryfast' as const },
-        balanced: { crf: 20, preset: 'medium' as const },
-        high: { crf: 16, preset: 'slow' as const },
-      }[quality]
+      const quality = (args.quality ?? 'balanced') as ExportQuality
+      if (!EXPORT_QUALITIES.includes(quality)) {
+        throw new OpError('invalid_argument', `quality must be one of ${EXPORT_QUALITIES.join(', ')}`)
+      }
+      const setup = await exportSetup(quality, args.hardware !== false)
 
       const output =
         args.output_path ?? join(project.path ?? ctx.defaultExportDir, `${timeline.name.replace(/[\\/:*?"<>|]/g, '_')}.mp4`)
-      const handle = renderTimeline(project, timeline, { outputPath: output, ...encoder })
-      await handle.promise
+      const started = Date.now()
+      const handle = renderTimeline(project, timeline, { outputPath: output, ...setup.options })
+      await media.trackExport(handle.promise)
+      const seconds = (Date.now() - started) / 1000
+      const duration = framesToSeconds(timelineTotalFrames(timeline), timeline.fps)
       return {
         changed: false,
-        summary: `Exported "${timeline.name}" (${framesToTimecode(timelineTotalFrames(timeline), timeline.fps)}) at ${quality} quality`,
+        summary: `Exported "${timeline.name}" (${framesToTimecode(timelineTotalFrames(timeline), timeline.fps)}) at ${quality} quality with ${setup.encoder.label}`,
         outputPath: output,
+        encoder: setup.encoder.label,
+        renderSeconds: Number(seconds.toFixed(2)),
+        realtimeFactor: Number((duration / Math.max(0.001, seconds)).toFixed(2)),
       }
     },
   },
@@ -1621,3 +1632,170 @@ const EFFECT_TOOLS: ToolDefinition[] = [
 
 TOOLS.push(...EFFECT_TOOLS)
 for (const tool of EFFECT_TOOLS) TOOLS_BY_NAME.set(tool.name, tool)
+
+// --- Performance, preview and cache ---------------------------------------
+
+const PERFORMANCE_FIELDS = {
+  preview_height: { type: 'integer', enum: [...PREVIEW_HEIGHTS], description: 'Height the timeline preview is rendered at. Lower plays smoother on a weak machine; the export is always full size.' },
+  parallel_jobs: { type: 'integer', minimum: 1, maximum: MAX_PARALLEL_JOBS, description: 'Preview slices and proxies encoded at the same time.' },
+  low_priority: bool('Run preview and proxy encodes below normal priority so editing stays fluid.'),
+  hardware_decode: bool('Decode sources on the GPU. Refused, with the reason, when no hardware decoder works on this machine.'),
+  auto_preview: bool('Encode changed preview slices by themselves after a pause in editing, below normal priority. Off by default.'),
+  cache_limit_gb: { type: 'number', minimum: 0.5, maximum: 500, description: 'Ceiling for regenerable cache data (preview slices, monitor frames). Proxies are never evicted automatically.' },
+}
+
+const SNAKE_TO_SETTING: Record<string, keyof PerformanceSettings> = {
+  preview_height: 'previewHeight',
+  parallel_jobs: 'parallelJobs',
+  low_priority: 'lowPriority',
+  hardware_decode: 'hardwareDecode',
+  auto_preview: 'autoPreview',
+  cache_limit_gb: 'cacheLimitGB',
+}
+
+function usagePayload(usage: Awaited<ReturnType<typeof media.usage>>): Record<string, unknown> {
+  return {
+    directory: usage.directory,
+    total: formatBytes(usage.totalBytes),
+    totalBytes: usage.totalBytes,
+    categories: Object.fromEntries(
+      Object.entries(usage.categories).map(([name, value]) => [
+        name,
+        { files: value.files, size: formatBytes(value.bytes), bytes: value.bytes },
+      ]),
+    ),
+  }
+}
+
+async function performancePayload(ctx: ToolContext): Promise<Record<string, unknown>> {
+  const encoder = await bestEncoder()
+  return {
+    settings: getPerformance(),
+    machine: {
+      logicalCores: cpus().length,
+      recommendedParallelJobs: defaultParallelJobs(),
+      encoder: { name: encoder.name, label: encoder.label, hardware: encoder.hardware },
+      hardwareDecodeAvailable: await hardwareDecodeWorks(),
+    },
+    cache: usagePayload(await media.usage(ctx.store.project)),
+  }
+}
+
+const PERFORMANCE_TOOLS: ToolDefinition[] = [
+  {
+    name: 'get_performance',
+    description:
+      'Read the performance settings (preview resolution, parallel encodes, priority, hardware decoding, idle ' +
+      'preview, cache ceiling), what this machine offers (cores, the GPU encoder actually working, whether hardware ' +
+      'decoding works) and how much disk the project cache uses. Call it before set_performance.',
+    inputSchema: object({}),
+    handler: (_args, ctx) => performancePayload(ctx),
+  },
+  {
+    name: 'set_performance',
+    description:
+      'Change performance settings. These belong to the machine, not the project: they are not part of the edit ' +
+      'and not undoable with undo. Every invalid value is named in one error. Changing preview_height makes the ' +
+      'next preview render at the new size; the slices already cached for the old size stay usable if it is set back.',
+    inputSchema: object(PERFORMANCE_FIELDS),
+    handler: async (args, ctx) => {
+      const update: Partial<PerformanceSettings> = {}
+      for (const [key, value] of Object.entries(args)) {
+        const setting = SNAKE_TO_SETTING[key]
+        if (!setting) throw new OpError('invalid_argument', `unknown setting "${key}"`)
+        ;(update as Record<string, unknown>)[setting] = value
+      }
+      if (Object.keys(update).length === 0) {
+        throw new OpError('invalid_argument', `name at least one setting: ${Object.keys(SNAKE_TO_SETTING).join(', ')}`)
+      }
+      if (update.hardwareDecode && !(await hardwareDecodeWorks())) {
+        throw new OpError(
+          'refused',
+          'no hardware decoder works on this machine: a test clip decoded with -hwaccel auto failed, so enabling ' +
+            'it would only make renders fail',
+        )
+      }
+      const settings = await setPerformance(update)
+      media.editHappened()
+      return { changed: true, summary: `Updated ${Object.keys(update).join(', ')}`, settings, ...(await performancePayload(ctx)) }
+    },
+  },
+  {
+    name: 'render_preview',
+    description:
+      'Build the playable timeline preview (the work zone if one is set), exactly like Ctrl+Shift+Enter in the ' +
+      'editor: only the 4-second slices changed since the last preview are encoded, the rest come from the cache. ' +
+      'Waits for it to finish and reports how many slices were encoded versus reused. The user can then play it.',
+    inputSchema: object({ timeline_id: str('Defaults to the active timeline.') }),
+    handler: async (args, ctx) => {
+      const project = ctx.store.project
+      const timeline = resolveTimeline(project, args.timeline_id)
+      const started = Date.now()
+      const state = await media.renderPreview(project, timeline)
+      const seconds = (Date.now() - started) / 1000
+      return {
+        changed: false,
+        summary:
+          state.encoded === 0
+            ? `Preview already up to date (${state.reused} slice(s) reused)`
+            : `Preview built in ${seconds.toFixed(1)} s — ${state.encoded} slice(s) encoded, ${state.reused} reused`,
+        encodedSlices: state.encoded,
+        reusedSlices: state.reused,
+        renderSeconds: Number(seconds.toFixed(2)),
+        size: `${state.width}x${state.height}`,
+        encoder: state.encoder,
+        startFrame: state.startFrame,
+        totalFrames: state.totalFrames,
+        path: state.path,
+      }
+    },
+  },
+  {
+    name: 'get_cache',
+    description:
+      'Disk used by the project cache, per kind: preview (timeline preview slices), frames (monitor stills), ' +
+      'proxies, thumbnails.',
+    inputSchema: object({}),
+    handler: async (_args, ctx) => usagePayload(await media.usage(ctx.store.project)),
+  },
+  {
+    name: 'clear_cache',
+    description:
+      'Delete cached data of the given kinds. Preview and frames regenerate on demand; clearing proxies also ' +
+      'switches the clips back to their originals in one undoable step, since a clip pointing at a deleted proxy ' +
+      'could not render.',
+    inputSchema: object(
+      {
+        categories: arr(
+          { type: 'string', enum: [...CACHE_CATEGORIES] },
+          `Kinds to clear: ${CACHE_CATEGORIES.join(', ')}.`,
+        ),
+      },
+      ['categories'],
+    ),
+    handler: async (args, ctx) => {
+      const categories = (args.categories ?? []) as CacheCategory[]
+      const unknown = categories.filter((c) => !CACHE_CATEGORIES.includes(c))
+      if (categories.length === 0 || unknown.length > 0) {
+        throw new OpError(
+          'invalid_argument',
+          `categories must name at least one of ${CACHE_CATEGORIES.join(', ')}` +
+            (unknown.length > 0 ? ` (unknown: ${unknown.join(', ')})` : ''),
+        )
+      }
+      const result = await media.clearCache(ctx.store, categories, (proxyArgs) => ctx.store.apply((p) => ops.setAssetProxies(p, proxyArgs)))
+      return {
+        changed: result.receipt?.changed ?? false,
+        summary: `Freed ${formatBytes(result.bytes)} in ${result.files} file(s) from ${categories.join(', ')}` +
+          (result.receipt ? ` — ${result.receipt.summary}` : ''),
+        freedBytes: result.bytes,
+        files: result.files,
+        ...(result.receipt ? { affectedIds: result.receipt.affectedIds } : {}),
+        cache: usagePayload(await media.usage(ctx.store.project)),
+      }
+    },
+  },
+]
+
+TOOLS.push(...PERFORMANCE_TOOLS)
+for (const tool of PERFORMANCE_TOOLS) TOOLS_BY_NAME.set(tool.name, tool)

@@ -5,11 +5,11 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, extname, basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
-import { tmpdir } from 'node:os'
+import { constants as osConstants, setPriority, tmpdir } from 'node:os'
 
 import { clipTypeForExtension, type MediaAsset, type Project, type Timeline } from '../../core/model.js'
 import { buildFrameCommand, buildRenderCommand, type RenderOptions } from '../../core/render.js'
@@ -81,10 +81,55 @@ function logCommand(binary: string, args: string[]): void {
   process.stderr.write(`[ffmpeg] ${binary} ${quoted.join(' ')}\n`)
 }
 
-function run(binary: string, args: string[], signal?: AbortSignal): Promise<{ stdout: string; stderr: string }> {
+/**
+ * Drops a child below normal priority.
+ *
+ * A preview or a proxy is background work: the user is still editing while it
+ * runs, and an encoder at normal priority takes every core the UI wanted for
+ * the next scrub. Best-effort — a platform that refuses just runs it at normal.
+ */
+export function lowerPriority(pid: number | undefined): void {
+  if (!pid) return
+  try {
+    setPriority(pid, osConstants.priority.PRIORITY_BELOW_NORMAL)
+  } catch {
+    // Not permitted here; normal priority is still correct, only less polite.
+  }
+}
+
+/**
+ * A sibling path to write into before the result is final.
+ *
+ * Every cache in this app decides "is it there?" by looking at the final path,
+ * so nothing may ever appear at that path half-written. Writing beside it and
+ * renaming is atomic on the same volume: the file is either complete or absent,
+ * whatever kills the process — a crash or a power cut included, which no
+ * cleanup handler can catch. The extension is kept so FFmpeg picks the same
+ * container.
+ */
+export function partialPath(finalPath: string): string {
+  const extension = extname(finalPath)
+  return `${finalPath.slice(0, finalPath.length - extension.length)}.part-${randomUUID().slice(0, 8)}${extension}`
+}
+
+/** Marks files that {@link partialPath} produced, for cache cleanup. */
+export const PARTIAL_MARKER = '.part-'
+
+/** Moves a finished partial file into place. */
+export async function commitPartial(partial: string, finalPath: string): Promise<void> {
+  await rename(partial, finalPath)
+}
+
+function run(
+  binary: string,
+  args: string[],
+  signal?: AbortSignal,
+  options: { background?: boolean } = {},
+): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     logCommand(binary, args)
     const child = spawn(binary, args, { windowsHide: true })
+    if (options.background) lowerPriority(child.pid)
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (chunk) => (stdout += chunk))
@@ -204,6 +249,17 @@ export interface RenderProgress {
   speed: string
 }
 
+/**
+ * How long a render may go without a progress report before it is killed.
+ *
+ * FFmpeg reports twice a second while it works. One that stops reporting is
+ * not slow, it is stuck — a filter graph that loops at 100% CPU forever, which
+ * is exactly what an unbounded `apad` in front of the limiter did one time in
+ * ten. Without a watchdog that looks like a progress bar frozen at 97% and a
+ * hot laptop, with nothing to tell anyone why.
+ */
+export const RENDER_STALL_MS = Number(process.env.PALMIER_RENDER_STALL_MS ?? 120_000)
+
 export interface RenderHandle {
   promise: Promise<string>
   cancel: () => void
@@ -234,6 +290,7 @@ export function renderTimeline(
   timeline: Timeline,
   options: RenderOptions,
   onProgress?: (progress: RenderProgress) => void,
+  spawnOptions: { background?: boolean } = {},
 ): RenderHandle {
   const sidecarDir = join(tmpdir(), `palmier-render-${randomUUID()}`)
   const controller = new AbortController()
@@ -248,10 +305,22 @@ export function renderTimeline(
     return await new Promise<string>((resolve, reject) => {
       logCommand(FFMPEG_PATH, command.args)
       child = spawn(FFMPEG_PATH, command.args, { windowsHide: true })
+      if (spawnOptions.background) lowerPriority(child.pid)
       let stderr = ''
       let buffer = ''
+      let stalled = false
+      let watchdog: ReturnType<typeof setTimeout> | null = null
+      const arm = () => {
+        if (watchdog) clearTimeout(watchdog)
+        watchdog = setTimeout(() => {
+          stalled = true
+          child?.kill('SIGKILL')
+        }, RENDER_STALL_MS)
+      }
+      arm()
 
       child.stdout.on('data', (chunk: Buffer) => {
+        arm()
         buffer += chunk.toString()
         let cut = buffer.lastIndexOf('progress=')
         if (cut < 0) return
@@ -272,9 +341,13 @@ export function renderTimeline(
         stderr += chunk
         if (stderr.length > 200_000) stderr = stderr.slice(-100_000)
       })
-      child.on('error', (error) => reject(new FFmpegError(`ffmpeg failed to start: ${error.message}`, stderr, null)))
+      child.on('error', (error) => {
+        if (watchdog) clearTimeout(watchdog)
+        reject(new FFmpegError(`ffmpeg failed to start: ${error.message}`, stderr, null))
+      })
       child.on('close', (code) => {
-        if (code === 0 && !controller.signal.aborted) return resolve(options.outputPath)
+        if (watchdog) clearTimeout(watchdog)
+        if (code === 0 && !controller.signal.aborted && !stalled) return resolve(options.outputPath)
         /*
          * Remove what was written before giving up.
          *
@@ -286,13 +359,21 @@ export function renderTimeline(
         void rm(options.outputPath, { force: true }).finally(() => {
           if (controller.signal.aborted) {
             reject(new FFmpegError('render cancelled', stderr.slice(-2000), code))
+          } else if (stalled) {
+            reject(
+              new FFmpegError(
+                `ffmpeg stopped making progress for ${Math.round(RENDER_STALL_MS / 1000)} s and was stopped`,
+                stderr.slice(-4000),
+                code,
+              ),
+            )
           } else {
             reject(new FFmpegError(`ffmpeg exited with ${code}`, stderr.slice(-4000), code))
           }
         })
       })
     })
-  })()
+  })().finally(() => rm(sidecarDir, { recursive: true, force: true }).catch(() => {}))
 
   return {
     promise,
@@ -303,36 +384,53 @@ export function renderTimeline(
   }
 }
 
+export interface ConcatOptions {
+  /**
+   * Encode the joined audio to AAC instead of copying it.
+   *
+   * Preview slices carry PCM precisely so that this step can encode the sound
+   * once, continuously: AAC slices joined by copy click at every seam and drift
+   * by one encoder delay per join (measured: +85 ms over three slices).
+   */
+  encodeAudio?: boolean
+  background?: boolean
+  signal?: AbortSignal
+}
+
 /**
- * Joins files listed in a concat-demuxer list into one, without re-encoding.
+ * Joins files listed in a concat-demuxer list into one, without re-encoding
+ * the picture.
  *
  * The inputs must share codec, size and rate — they do, because the preview
- * encodes every slice with the same settings. This is a remux: a long timeline
- * stitches in seconds where re-encoding it would take minutes.
+ * encodes every slice with the same settings. The video is a remux: a long
+ * timeline stitches in seconds where re-encoding it would take minutes.
  */
-export async function concatFiles(listPath: string, outputPath: string): Promise<string> {
+export async function concatFiles(listPath: string, outputPath: string, options: ConcatOptions = {}): Promise<string> {
   await mkdir(dirname(outputPath), { recursive: true })
+  const partial = partialPath(outputPath)
   try {
-    await runConcat(listPath, outputPath)
+    await run(
+      FFMPEG_PATH,
+      [
+        '-hide_banner', '-nostdin', '-y',
+        // `safe 0` because an entry may be any name the caller chose.
+        '-f', 'concat', '-safe', '0',
+        '-i', listPath,
+        ...(options.encodeAudio ? ['-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k'] : ['-c', 'copy']),
+        '-movflags', '+faststart',
+        partial,
+      ],
+      options.signal,
+      { background: options.background },
+    )
+    await commitPartial(partial, outputPath)
   } catch (error) {
     // A half-written file is worse than none: the cache would call it ready and
     // the player would fail to open it, which looks like a playback bug.
-    await rm(outputPath, { force: true })
+    await rm(partial, { force: true })
     throw error
   }
   return outputPath
-}
-
-async function runConcat(listPath: string, outputPath: string): Promise<void> {
-  await run(FFMPEG_PATH, [
-    '-hide_banner', '-nostdin', '-y',
-    // `safe 0` because the list holds absolute paths, which is what we write.
-    '-f', 'concat', '-safe', '0',
-    '-i', listPath,
-    '-c', 'copy',
-    '-movflags', '+faststart',
-    outputPath,
-  ])
 }
 
 export async function renderFrame(
@@ -340,13 +438,23 @@ export async function renderFrame(
   timeline: Timeline,
   frame: number,
   outputPath: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   const sidecarDir = join(tmpdir(), `palmier-frame-${randomUUID()}`)
-  const command = buildFrameCommand(project, timeline, frame, outputPath, sidecarDir)
-  await mkdir(sidecarDir, { recursive: true })
-  await writeSidecars(command.sidecars)
-  await mkdir(dirname(outputPath), { recursive: true })
-  await run(FFMPEG_PATH, command.args)
+  const partial = partialPath(outputPath)
+  const command = buildFrameCommand(project, timeline, frame, partial, sidecarDir)
+  try {
+    await mkdir(sidecarDir, { recursive: true })
+    await writeSidecars(command.sidecars)
+    await mkdir(dirname(outputPath), { recursive: true })
+    await run(FFMPEG_PATH, command.args, signal)
+    await commitPartial(partial, outputPath)
+  } catch (error) {
+    await rm(partial, { force: true })
+    throw error
+  } finally {
+    await rm(sidecarDir, { recursive: true, force: true }).catch(() => {})
+  }
   return outputPath
 }
 
@@ -362,16 +470,24 @@ export async function renderAssetFrame(
   maxWidth = 960,
 ): Promise<string> {
   await mkdir(dirname(outputPath), { recursive: true })
+  const partial = partialPath(outputPath)
   const args = ['-hide_banner', '-nostdin', '-y']
   if (asset.type !== 'image') args.push('-ss', Math.max(0, seconds).toFixed(6))
   args.push(
     '-i', asset.path,
     '-frames:v', '1',
     '-vf', `scale='min(${maxWidth},iw)':-2:flags=bicubic`,
+    '-q:v', '3',
     '-update', '1',
-    outputPath,
+    partial,
   )
-  await run(FFMPEG_PATH, args)
+  try {
+    await run(FFMPEG_PATH, args)
+    await commitPartial(partial, outputPath)
+  } catch (error) {
+    await rm(partial, { force: true })
+    throw error
+  }
   return outputPath
 }
 

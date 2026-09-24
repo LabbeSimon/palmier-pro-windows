@@ -17,9 +17,10 @@ export interface PlayerState {
  * Drives the timeline proxy: knows whether one exists, whether it still matches
  * the edit, and owns the play/pause state.
  *
- * The proxy is never rendered on its own. Encoding on every keystroke would
- * burn the machine, so it follows Kdenlive: you ask for it, and the UI says
- * plainly when what you are watching is out of date. Asking to *play* counts
+ * The proxy is never rendered on every keystroke — that would burn the
+ * machine. It follows Kdenlive: you ask for it, or you turn on the idle
+ * preview, which waits for a pause in editing; either way the UI says plainly
+ * when what you are watching is out of date. Asking to *play* counts
  * as asking — and then it plays, rather than stopping once the encode is done.
  */
 export function usePlayer(project: Project | null, timeline: Timeline | null) {
@@ -39,8 +40,20 @@ export function usePlayer(project: Project | null, timeline: Timeline | null) {
   }, [refresh, project])
 
   useEffect(() => {
-    const offProgress = window.palmier.preview.onProgress(setProgress)
+    // A render the idle scheduler or an agent started is still a render: the
+    // monitor must say so, not sit on "no preview" while the fans spin up.
+    let announced = false
+    const offProgress = window.palmier.preview.onProgress((next) => {
+      setProgress(next)
+      setRendering(true)
+      // Once per render: learn who started it, so the monitor can say.
+      if (!announced) {
+        announced = true
+        void refresh()
+      }
+    })
     const offDone = window.palmier.preview.onDone(() => {
+      announced = false
       setProgress(null)
       setRendering(false)
       void refresh()

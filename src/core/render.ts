@@ -48,7 +48,32 @@ export interface RenderOptions {
    * the chosen encoder is visible in the argv a test can read.
    */
   encoder?: EncoderSpec
+  /**
+   * Audio codec of the output. `pcm` is for preview slices: they are stitched
+   * together later, and AAC cannot be — every AAC stream opens with an encoder
+   * delay, so joined slices click at each seam and drift out of sync by that
+   * delay at every join. PCM has no delay; the join encodes AAC once.
+   */
+  audioCodec?: 'aac' | 'pcm'
+  /**
+   * Emit an audio stream even when nothing in the range makes a sound.
+   *
+   * Slices that are joined must all carry the same streams: a silent slice with
+   * no audio track would leave the concat demuxer with a hole it fills by
+   * shifting everything after it.
+   */
+  alwaysAudio?: boolean
+  /**
+   * Let FFmpeg decode sources on the GPU (`-hwaccel auto`). Frames come back to
+   * system memory for the filters. Only set when the main process has probed
+   * it: on a machine with no usable device some builds abort outright instead
+   * of falling back to the CPU.
+   */
+  hardwareDecode?: boolean
 }
+
+/** Every output carries the same audio layout, whatever the sources were. */
+export const OUTPUT_SAMPLE_RATE = 48000
 
 /**
  * What the render graph needs to know about an encoder.
@@ -300,7 +325,10 @@ export function buildRenderCommand(
     if (source.type === 'image') {
       inputArgs.push('-loop', '1', '-framerate', String(fps), '-t', sourceDurationSeconds.toFixed(6), '-i', sourcePath(source, options))
     } else {
-      inputArgs.push('-ss', sourceStartSeconds.toFixed(6), '-t', sourceDurationSeconds.toFixed(6), '-i', sourcePath(source, options))
+      inputArgs.push(
+        ...(options.hardwareDecode && source.type === 'video' ? ['-hwaccel', 'auto'] : []),
+        '-ss', sourceStartSeconds.toFixed(6), '-t', sourceDurationSeconds.toFixed(6), '-i', sourcePath(source, options),
+      )
     }
     const index = inputIndex++
 
@@ -453,9 +481,11 @@ export function buildRenderCommand(
         const outStart = framesToSeconds(clip.durationFrames - clip.fadeOutFrames, fps)
         chain.push(`afade=t=out:st=${outStart.toFixed(6)}:d=${framesToSeconds(clip.fadeOutFrames, fps).toFixed(6)}`)
       }
-      // adelay wants integer milliseconds and one value per channel.
-      const delayMs = Math.max(0, Math.round(clipStartSeconds * 1000))
-      if (delayMs > 0) chain.push(`adelay=${delayMs}:all=1`)
+      // In samples rather than milliseconds: rounding to the millisecond puts a
+      // clip up to half a millisecond off its picture, and that error is
+      // different in every slice of a preview.
+      const delaySamples = Math.max(0, Math.round(clipStartSeconds * OUTPUT_SAMPLE_RATE))
+      if (delaySamples > 0) chain.push(`adelay=${delaySamples}S:all=1`)
 
       const label = `ca${index}`
       filters.push(`[${index}:a]${chain.join(',')}[${label}]`)
@@ -474,15 +504,38 @@ export function buildRenderCommand(
     filters.push(`[${videoLabel}]${tail}[vout]`)
   }
 
-  const hasAudio = audioLabels.length > 0
-  if (hasAudio) {
+  /*
+   * One fixed layout at the end of the audio chain. Without it the output took
+   * whatever the sources were — a mono clip gave a mono file — and two preview
+   * slices with different layouts cannot be joined.
+   */
+  const layout = `aformat=sample_rates=${OUTPUT_SAMPLE_RATE}:channel_layouts=stereo`
+  const hasAudio = audioLabels.length > 0 || (Boolean(options.alwaysAudio) && !options.videoOnly)
+  if (audioLabels.length > 0) {
     filters.push(
-      // duration=longest pads the shorter branches with silence, so no apad is needed.
+      // duration=longest pads the shorter branches with silence. apad + atrim
+      // then make the stream exactly as long as the range, even when the last
+      // sound ends before it does. The pad is bounded (`whole_dur`): an endless
+      // apad feeding the limiter's look-ahead sent FFmpeg into a loop that never
+      // exited, at 100% CPU, on some graphs.
       `${audioLabels.map((l) => `[${l}]`).join('')}amix=inputs=${audioLabels.length}:duration=longest:` +
-        `normalize=0:dropout_transition=0,atrim=0:${totalSeconds.toFixed(6)},asetpts=PTS-STARTPTS,` +
-        `alimiter=limit=0.98[aout]`,
+        `normalize=0:dropout_transition=0,apad=whole_dur=${totalSeconds.toFixed(6)},` +
+        `atrim=0:${totalSeconds.toFixed(6)},asetpts=PTS-STARTPTS,` +
+        // A safety limiter and nothing else: `latency=1` gives back the 5 ms its
+        // look-ahead delays the sound by (a slip under the picture, and a phase
+        // jump at every preview seam), and `level=0` stops it from raising
+        // the whole mix by 1/limit (+0.2 dB, measured), which it does by default.
+        `alimiter=limit=0.98:level=0:latency=1,${layout}[aout]`,
+    )
+  } else if (hasAudio) {
+    filters.push(
+      `anullsrc=r=${OUTPUT_SAMPLE_RATE}:cl=stereo,atrim=0:${totalSeconds.toFixed(6)},asetpts=PTS-STARTPTS,${layout}[aout]`,
     )
   }
+  const audioArgs =
+    options.audioCodec === 'pcm'
+      ? ['-c:a', 'pcm_s16le']
+      : ['-c:a', 'aac', '-b:a', options.audioBitrate ?? '192k']
 
   const encoder = options.encoder
   const codec = encoder?.name ?? options.videoCodec ?? 'libx264'
@@ -509,11 +562,12 @@ export function buildRenderCommand(
     ...(encoder?.uploadFilter ? [] : ['-pix_fmt', 'yuv420p']),
     '-r',
     String(fps),
-    ...(hasAudio ? ['-c:a', 'aac', '-b:a', options.audioBitrate ?? '192k'] : []),
+    ...(hasAudio ? [...audioArgs, '-ar', String(OUTPUT_SAMPLE_RATE)] : []),
     '-t',
     ffmpegTime(totalFrames, fps),
-    '-movflags',
-    '+faststart',
+    // A slice is joined, never streamed, so moving its index costs a second
+    // pass over the file for nothing.
+    ...(options.audioCodec === 'pcm' ? [] : ['-movflags', '+faststart']),
     '-progress',
     'pipe:1',
     options.outputPath,

@@ -16,6 +16,9 @@
 
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import type { EncoderSpec } from '../../core/render.js'
 import { FFMPEG_PATH } from './ffmpeg.js'
@@ -158,7 +161,47 @@ export function toSpec(encoder: VideoEncoder, crf: number): EncoderSpec {
   }
 }
 
+let decodeCached: Promise<boolean> | null = null
+
+/**
+ * Whether `-hwaccel auto` actually decodes on this machine.
+ *
+ * Probed, not assumed, and for a worse reason than the encoders: on a machine
+ * with no usable device, some FFmpeg builds do not fall back to the CPU — they
+ * abort on an assertion inside the VAAPI loader. So a tiny clip is encoded in
+ * software and then decoded with the flag; only a clean exit counts.
+ */
+export function hardwareDecodeWorks(): Promise<boolean> {
+  if (decodeCached) return decodeCached
+  decodeCached = (async () => {
+    const sample = join(tmpdir(), `palmier-hwdec-${process.pid}-${Date.now()}.mp4`)
+    try {
+      await exec(
+        FFMPEG_PATH,
+        [
+          '-hide_banner', '-v', 'error', '-nostdin', '-y',
+          '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=25:duration=0.4',
+          '-c:v', 'libx264', '-pix_fmt', 'yuv420p', sample,
+        ],
+        { timeout: 20_000 },
+      )
+      await exec(
+        FFMPEG_PATH,
+        ['-hide_banner', '-v', 'error', '-nostdin', '-hwaccel', 'auto', '-i', sample, '-f', 'null', '-'],
+        { timeout: 20_000 },
+      )
+      return true
+    } catch {
+      return false
+    } finally {
+      await rm(sample, { force: true }).catch(() => {})
+    }
+  })()
+  return decodeCached
+}
+
 /** Forgets the probe result. Tests use it; nothing else should need to. */
 export function resetEncoderCache(): void {
   cached = null
+  decodeCached = null
 }

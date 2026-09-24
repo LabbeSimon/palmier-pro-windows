@@ -15,6 +15,7 @@ import { Monitors } from './components/Monitors.js'
 import { Dock, type DockPanel, type DockSide } from './components/Dock.js'
 import { Splitter } from './components/Splitter.js'
 import { StatusBar } from './components/StatusBar.js'
+import { PerformanceDialog } from './components/PerformanceDialog.js'
 import { TimelineView, type TimelineTool } from './components/TimelineView.js'
 import { Toolbar } from './components/Toolbar.js'
 import { useEditor, usePreviewFrame } from './state.js'
@@ -104,6 +105,7 @@ export function App() {
   const [snapEnabled, setSnapEnabled] = useState(true)
   const [leftTab, setLeftTab] = useState<string>('media')
   const [rightTab, setRightTab] = useState<string>('inspector')
+  const [performanceOpen, setPerformanceOpen] = useState(false)
   const [layout, setLayout] = useStickyLayout()
 
   /**
@@ -366,10 +368,11 @@ export function App() {
         case 'view:agent': showPanel('agent'); break
         case 'playhead:start': setPlayhead(0); break
         case 'playhead:end': setPlayhead(Math.max(0, totalFrames - 1)); break
+        case 'settings:performance': setPerformanceOpen(true); break
         case 'help:mcp':
           setStatus({
             text: state.mcp.endpoint
-              ? `Point your agent at ${state.mcp.endpoint} — 30 tools available`
+              ? `Point your agent at ${state.mcp.endpoint}`
               : 'The MCP server is not running',
             tone: state.mcp.running ? 'ok' : 'error',
           })
@@ -431,6 +434,17 @@ export function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [totalFrames, player, multicamClip, run, timelineId, playhead])
+
+  // Above the early return below: hooks must run in the same order every render.
+  const closePerformance = useCallback(() => {
+    setPerformanceOpen(false)
+    // Resolution or cache changes can make the current preview stale or gone.
+    void player.refresh()
+  }, [player])
+  const statusFromDialog = useCallback(
+    (text: string, tone: 'ok' | 'error') => setStatus({ text, tone }),
+    [setStatus],
+  )
 
   if (!project || !timeline) {
     return <div className="empty">Loading project…</div>
@@ -767,6 +781,13 @@ export function App() {
         clipCount={clipCount}
         assetCount={project.assets.length}
       />
+
+      {performanceOpen ? (
+        <PerformanceDialog
+          onClose={closePerformance}
+          onStatus={statusFromDialog}
+        />
+      ) : null}
     </div>
   )
 }

@@ -45,6 +45,7 @@ export type MenuCommand =
   | 'playhead:start'
   | 'playhead:end'
   | 'help:mcp'
+  | 'settings:performance'
 
 export function buildMenu(window: BrowserWindow): Menu {
   const send = (command: MenuCommand) => () => window.webContents.send('menu:command', command)
@@ -127,6 +128,13 @@ export function buildMenu(window: BrowserWindow): Menu {
         { type: 'separator' },
         { role: 'togglefullscreen' },
         { role: 'toggleDevTools' },
+      ],
+    },
+    {
+      // Where Kdenlive keeps its configuration and its cached-data manager.
+      label: '&Settings',
+      submenu: [
+        { label: 'Performance and cached data…', click: send('settings:performance') },
       ],
     },
     {

@@ -59,7 +59,7 @@ describe('an empty file left by a dead render', () => {
 
     // Exactly what a killed FFmpeg leaves behind.
     await mkdir(join(cacheDir, 'preview-chunks'), { recursive: true })
-    await writeFile(join(cacheDir, 'preview-chunks', `chunk-${plan.chunks[0]!.fingerprint}.mp4`), '')
+    await writeFile(join(cacheDir, 'preview-chunks', `chunk-${plan.chunks[0]!.fingerprint}.mov`), '')
 
     const after = planPreview(p, p.timelines[0]!, cacheDir)
     expect(after.dirty).toHaveLength(plan.chunks.length)
@@ -100,7 +100,7 @@ describe('the concat list', () => {
 
     // Rebuild a list the same way the code does and check its shape.
     const plan = planPreview(p, p.timelines[0]!, cacheDir)
-    const list = plan.chunks.map((chunk) => `file 'chunk-${chunk.fingerprint}.mp4'`).join('\n')
+    const list = plan.chunks.map((chunk) => `file 'chunk-${chunk.fingerprint}.mov'`).join('\n')
     expect(list).not.toContain('\\')
     expect(list).not.toContain('/')
 
